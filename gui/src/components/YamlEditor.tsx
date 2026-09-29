@@ -1,4 +1,5 @@
 import { createSignal, createEffect, onMount, onCleanup, Show } from "solid-js";
+import { t } from "../lib/i18n";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { yaml } from "@codemirror/lang-yaml";
@@ -214,10 +215,10 @@ export default function YamlEditor(props: YamlEditorProps) {
         }}>
           <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
             <span style={{ "font-size": "13px", "font-weight": "600", color: "#a9b1d6" }}>
-              {props.title || "YAML Editor"}
+              {props.title || t("YAML Editor")}
             </span>
             <Show when={modified()}>
-              <span style={{ "font-size": "11px", color: "#e0af68" }}>(modified)</span>
+              <span style={{ "font-size": "11px", color: "#e0af68" }}>{t("(modified)")}</span>
             </Show>
           </div>
           <div style={{ display: "flex", gap: "6px" }}>
@@ -228,12 +229,12 @@ export default function YamlEditor(props: YamlEditorProps) {
                 disabled={saving() || !modified()}
                 style={{ "font-size": "11px" }}
               >
-                {saving() ? "Applying..." : "Apply Changes"}
+                {saving() ? t("Applying...") : t("Apply Changes")}
               </button>
             </Show>
             <Show when={props.onClose}>
               <button class="btn btn-sm" onClick={() => props.onClose?.()} style={{ "font-size": "11px" }}>
-                Close
+                {t("Close")}
               </button>
             </Show>
           </div>
@@ -244,7 +245,7 @@ export default function YamlEditor(props: YamlEditorProps) {
           padding: "16px", color: "#f7768e", background: "rgba(247,118,142,0.08)",
           border: "1px solid rgba(247,118,142,0.2)", "border-radius": "8px", margin: "12px",
         }}>
-          <strong>Editor failed to load:</strong> {loadError()}
+          <strong>{t("Editor failed to load:")}</strong> {loadError()}
           <pre style={{
             "margin-top": "12px", background: "#1a1b26", padding: "12px", "border-radius": "6px",
             "font-family": "'JetBrains Mono NF', monospace", "font-size": "12px",

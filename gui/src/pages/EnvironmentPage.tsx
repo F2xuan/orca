@@ -1,4 +1,5 @@
 import { createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { EnvironmentStatus, HealthCheck, MachineInfo, SystemHealth, DockerDesktopStatus } from "../lib/types";
@@ -7,6 +8,19 @@ import { formatBytes } from "../lib/format";
 import { showToast } from "../components/Toast";
 import { confirmDanger } from "../components/ConfirmDialog";
 import { logError } from "../lib/activityStore";
+
+
+// Backend health warnings arrive as fixed English strings; localise by pattern.
+const translateWarning = (w: string): string => {
+  const runtime = w.replace(" is not running or not reachable", "");
+  if (w.endsWith(" is not running or not reachable") && (runtime === "Docker" || runtime === "Podman")) {
+    return t("{runtime} is not running or not reachable", { runtime: t(runtime) });
+  }
+  const m = w.match(/^(\d+)GB of Docker storage is reclaimable — consider pruning$/);
+  if (m) return t("{gb}GB of Docker storage is reclaimable — consider pruning", { gb: m[1] });
+  return t(w);
+};
+
 
 export default function EnvironmentPage() {
   const [status, setStatus] = createSignal<EnvironmentStatus | null>(null);
@@ -64,7 +78,7 @@ export default function EnvironmentPage() {
       if (ddRes.status === "fulfilled" && ddRes.value) setDdStatus(ddRes.value as DockerDesktopStatus);
       // If all three failed, show a fallback state so the page isn't stuck on loading
       if (envRes.status === "rejected" && machineRes.status === "rejected" && healthRes.status === "rejected") {
-        setHealth({ docker_connected: false, docker_version: null, disk_usage: null, system_resources: null, warnings: ["Could not reach Docker. The setup wizard below will help you get started."] } as SystemHealth);
+        setHealth({ docker_connected: false, docker_version: null, disk_usage: null, system_resources: null, warnings: [] as string[] } as SystemHealth);
       }
     } catch {
       // Don't show toast for expected failures during first setup
@@ -86,7 +100,7 @@ export default function EnvironmentPage() {
           "This permanently deletes the existing Lima VM and rebuilds it on " +
           "Ubuntu 26.04 with vsock networking. Containers, images, and volumes " +
           "inside it will be lost — you'll re-pull and re-run them.",
-        confirmLabel: "Recreate VM",
+        confirmLabel: t("Recreate VM"),
       });
       if (!ok) return;
     }
@@ -132,9 +146,9 @@ export default function EnvironmentPage() {
       logError(`Environment fix stream error for ${checkName}: ${e}`);
       try {
         setActionLog((prev) => prev || "");
-        setActionLog((prev) => prev + (prev ? "\nFalling back to direct method...\n\n" : "Setting up...\n\n"));
+        setActionLog((prev) => prev + (prev ? "\n" + t("Falling back to direct method...") + "\n\n" : t("Setting up...") + "\n\n"));
         const result = (await invoke("env_fix", { action })) as { output: string };
-        setActionLog((prev) => prev + (result.output || "Setup completed.\n"));
+        setActionLog((prev) => prev + (result.output || t("Setup completed.") + "\n"));
         setActionSuccess(true);
       } catch (e2) {
         logError(`Environment fix failed for ${checkName}: ${e2}`);
@@ -146,15 +160,15 @@ export default function EnvironmentPage() {
       setActionRunning(false);
       // Auto-restart daemon after successful fix (Docker may have been restarted)
       if (actionSuccess()) {
-        setActionLog((prev) => prev + "\n>>> Restarting Orca daemon...\n");
+        setActionLog((prev) => prev + "\n>>> " + t("Restarting Orca daemon...") + "\n");
         try {
           await invoke("stop_daemon");
           await new Promise(r => setTimeout(r, 2000));
           await invoke("start_daemon");
           await new Promise(r => setTimeout(r, 3000));
-          setActionLog((prev) => prev + ">>> Daemon restarted successfully.\n");
+          setActionLog((prev) => prev + ">>> " + t("Daemon restarted successfully.") + "\n");
         } catch {
-          setActionLog((prev) => prev + ">>> Daemon restart failed. Close and reopen Orca Desktop.\n");
+          setActionLog((prev) => prev + ">>> " + t("Daemon restart failed. Close and reopen Orca Desktop.") + "\n");
         }
         await refresh();
       }
@@ -164,14 +178,14 @@ export default function EnvironmentPage() {
   const closeActionDialog = async () => {
     setActionDialogOpen(false);
     if (actionSuccess()) {
-      showToast("Restarting Orca daemon to reconnect to Docker...", "info");
+      showToast(t("Restarting Orca daemon to reconnect to Docker..."), "info");
       try {
         await invoke("stop_daemon");
         await new Promise(r => setTimeout(r, 2000));
         await invoke("start_daemon");
         await new Promise(r => setTimeout(r, 3000));
       } catch {}
-      showToast("Daemon restarted", "success");
+      showToast(t("Daemon restarted"), "success");
     }
     await refresh();
   };
@@ -223,16 +237,16 @@ export default function EnvironmentPage() {
   const _restartOrcaDaemon = async () => {
     setRestartingOrca(true);
     try {
-      showToast("Restarting Orca daemon...", "info");
+      showToast(t("Restarting Orca daemon..."), "info");
       await invoke("stop_daemon");
       await new Promise(r => setTimeout(r, 1500));
       await invoke("start_daemon");
       await new Promise(r => setTimeout(r, 2000));
-      showToast("Orca daemon restarted", "success");
+      showToast(t("Orca daemon restarted"), "success");
       await refresh();
     } catch (e) {
       logError(`Failed to restart Orca daemon: ${e}`);
-      showToast(`Restart failed: ${e}`, "error");
+      showToast(t("Restart failed: {error}", { error: String(e) }), "error");
     } finally {
       setRestartingOrca(false);
     }
@@ -241,7 +255,7 @@ export default function EnvironmentPage() {
   const restartDocker = async () => {
     setRestartingDocker(true);
     try {
-      showToast("Restarting Docker and Orca daemon...", "info");
+      showToast(t("Restarting Docker and Orca daemon..."), "info");
 
       // Stop the Orca daemon first
       try { await invoke("stop_daemon"); } catch {}
@@ -255,11 +269,11 @@ export default function EnvironmentPage() {
       try { await invoke("start_daemon"); } catch {}
       await new Promise(r => setTimeout(r, 3000));
 
-      showToast("Docker and Orca daemon restarted", "success");
+      showToast(t("Docker and Orca daemon restarted"), "success");
       await refresh();
     } catch (e) {
       logError(`Failed to restart Docker: ${e}`);
-      showToast(`Docker restart failed: ${e}`, "error");
+      showToast(t("Docker restart failed: {error}", { error: String(e) }), "error");
     } finally {
       setRestartingDocker(false);
     }
@@ -271,18 +285,18 @@ export default function EnvironmentPage() {
       // Step 1: If Orca runtime isn't available, the user needs to set up Docker first
       const dd = ddStatus();
       if (dd && !dd.orca_runtime_available) {
-        showToast("Setting up Orca runtime first...", "info");
-        runFix("setup_docker_macos", "Docker Setup");
+        showToast(t("Setting up Orca runtime first..."), "info");
+        runFix("setup_docker_macos", t("Docker Setup"));
         return;
       }
 
       // Step 2: Switch Docker context to lima-orca
-      showToast("Switching to Orca runtime...", "info");
+      showToast(t("Switching to Orca runtime..."), "info");
       const result = await invoke("switch_to_orca_runtime") as { message: string };
 
       // Step 3: Optionally stop Docker Desktop
       if (stopDdChecked()) {
-        showToast("Stopping Docker Desktop...", "info");
+        showToast(t("Stopping Docker Desktop..."), "info");
         try {
           await invoke("stop_docker_desktop");
         } catch (e) {
@@ -291,7 +305,7 @@ export default function EnvironmentPage() {
       }
 
       // Step 4: Restart daemon to pick up new context
-      showToast("Restarting Orca daemon...", "info");
+      showToast(t("Restarting Orca daemon..."), "info");
       try {
         await invoke("stop_daemon");
         await new Promise(r => setTimeout(r, 2000));
@@ -305,14 +319,14 @@ export default function EnvironmentPage() {
       await refresh();
     } catch (e) {
       logError(`Migration failed: ${e}`);
-      showToast(`Migration failed: ${e}`, "error");
+      showToast(t("Migration failed: {error}", { error: String(e) }), "error");
     } finally {
       setMigrating(false);
     }
   };
 
   const runDiagnose = async () => {
-    setDiagnoseLog("Testing connection methods...\n\n");
+    setDiagnoseLog(t("Testing connection methods...") + "\n\n");
     setDiagnoseRunning(true);
     setDiagnoseResult(null);
     setDiagnoseOpen(true);
@@ -332,7 +346,7 @@ export default function EnvironmentPage() {
       }
     } catch (e) {
       logError(`Connection diagnostics failed: ${e}`);
-      setDiagnoseLog(`Failed to run diagnostics: ${e}`);
+      setDiagnoseLog(t("Failed to run diagnostics: {error}", { error: String(e) }));
       setDiagnoseResult(false);
     } finally {
       setDiagnoseRunning(false);
@@ -342,35 +356,35 @@ export default function EnvironmentPage() {
   return (
     <div>
       <div class="page-header">
-        <h1 class="page-title">System Health</h1>
+        <h1 class="page-title">{t("System Health")}</h1>
         <div class="page-actions">
           <Show when={!health()?.docker_connected}>
             <button class="btn btn-primary" disabled={actionRunning()} onClick={() => {
               const action = navigator.platform.includes("Mac") ? "setup_docker_macos"
                 : navigator.platform.includes("Win") ? "install_docker"
                 : "install_docker_linux";
-              runFix(action, "Docker Setup");
+              runFix(action, t("Docker Setup"));
             }}>
-              Set up Docker
+              {t("Set up Docker")}
             </button>
           </Show>
           <Show when={navigator.platform.includes("Mac")}>
             <button
               class="btn"
               disabled={actionRunning()}
-              onClick={() => runFix("recreate_lima_orca", "Recreate Docker VM")}
+              onClick={() => runFix("recreate_lima_orca", t("Recreate Docker VM"))}
             >
-              Recreate VM
+              {t("Recreate VM")}
             </button>
           </Show>
           <button class="btn" onClick={restartDocker} disabled={restartingDocker() || restartingOrca()}>
-            {restartingDocker() ? "Restarting..." : "Restart Docker & Orca"}
+            {restartingDocker() ? t("Restarting...") : t("Restart Docker & Orca")}
           </button>
           <button class="btn" onClick={runDiagnose}>
-            Diagnose
+            {t("Diagnose")}
           </button>
           <button class="btn" onClick={refresh} disabled={loading()}>
-            {loading() ? "Checking..." : "Re-check"}
+            {loading() ? t("Checking...") : t("Re-check")}
           </button>
         </div>
       </div>
@@ -415,7 +429,7 @@ export default function EnvironmentPage() {
                 </div>
                 <div style={{ flex: "1" }}>
                   <div style={{ "font-size": "20px", "font-weight": "700", color: "#e6edf3", "margin-bottom": "4px" }}>
-                    All Systems Operational
+                    {t("All Systems Operational")}
                   </div>
                   <div style={{ "font-size": "14px", color: "#8b949e", "line-height": "1.5" }}>
                     {platformLabel(s().platform)} {"\u2022"} Runtime: {
@@ -441,10 +455,10 @@ export default function EnvironmentPage() {
                   padding: "28px 32px",
                 }}>
                   <div style={{ "font-size": "16px", "font-weight": "700", color: "#e6edf3", "margin-bottom": "8px" }}>
-                    Switch to Orca Runtime
+                    {t("Switch to Orca Runtime")}
                   </div>
                   <div style={{ "font-size": "13px", color: "#8b949e", "line-height": "1.6", "margin-bottom": "20px" }}>
-                    You're currently using Docker Desktop's daemon. Orca can run Docker with its own lightweight runtime — less memory, no license required, zero telemetry.
+                    {t("You're currently using Docker Desktop's daemon. Orca can run Docker with its own lightweight runtime — less memory, no license required, zero telemetry.")}
                   </div>
 
                   {/* Comparison columns */}
@@ -454,9 +468,9 @@ export default function EnvironmentPage() {
                       border: "1px solid rgba(248, 81, 73, 0.15)",
                       "border-radius": "8px", padding: "14px 16px",
                     }}>
-                      <div style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3", "margin-bottom": "10px" }}>Docker Desktop</div>
+                      <div style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3", "margin-bottom": "10px" }}>{t("Docker Desktop")}</div>
                       <div style={{ "font-size": "12px", color: "#8b949e", "line-height": "1.8" }}>
-                        ~2 GB RAM<br/>License required<br/>Closed source<br/>Telemetry
+                        {t("~2 GB RAM")}<br/>{t("License required")}<br/>{t("Closed source")}<br/>{t("Telemetry")}
                       </div>
                     </div>
                     <div style={{
@@ -464,15 +478,15 @@ export default function EnvironmentPage() {
                       border: "1px solid rgba(63, 185, 80, 0.15)",
                       "border-radius": "8px", padding: "14px 16px",
                     }}>
-                      <div style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3", "margin-bottom": "10px" }}>Orca Runtime</div>
+                      <div style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3", "margin-bottom": "10px" }}>{t("Orca Runtime")}</div>
                       <div style={{ "font-size": "12px", color: "#3fb950", "line-height": "1.8" }}>
-                        ~200 MB RAM<br/>Free forever<br/>Open source<br/>Zero telemetry
+                        {t("~200 MB RAM")}<br/>{t("Free forever")}<br/>{t("Open source")}<br/>{t("Zero telemetry")}
                       </div>
                     </div>
                   </div>
 
                   <div style={{ "font-size": "12px", color: "#6e7681", "margin-bottom": "16px" }}>
-                    Your containers and images will still be available.
+                    {t("Your containers and images will still be available.")}
                   </div>
 
                   {/* Stop Docker Desktop checkbox */}
@@ -487,7 +501,7 @@ export default function EnvironmentPage() {
                       onChange={(e) => setStopDdChecked(e.currentTarget.checked)}
                       style={{ "accent-color": "#58a6ff" }}
                     />
-                    Also stop Docker Desktop to free resources
+                    {t("Also stop Docker Desktop to free resources")}
                   </label>
 
                   <div style={{ display: "flex", gap: "10px" }}>
@@ -496,10 +510,10 @@ export default function EnvironmentPage() {
                       disabled={migrating()}
                       onClick={runMigration}
                     >
-                      {migrating() ? "Switching..." : "Switch to Orca Runtime"}
+                      {migrating() ? t("Switching...") : t("Switch to Orca Runtime")}
                     </button>
                     <button class="btn" onClick={() => setMigrationDismissed(true)}>
-                      Maybe Later
+                      {t("Maybe Later")}
                     </button>
                   </div>
                 </div>
@@ -516,7 +530,7 @@ export default function EnvironmentPage() {
                   display: "flex", "align-items": "center", gap: "8px",
                 }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                  Using Orca runtime — Docker Desktop is installed but not the active context.
+                  {t("Using Orca runtime — Docker Desktop is installed but not the active context.")}
                 </div>
               </Show>
 
@@ -551,7 +565,7 @@ export default function EnvironmentPage() {
                             <button class="btn btn-sm" style={{ "font-size": "11px", padding: "2px 8px" }}
                               disabled={actionRunning()}
                               onClick={() => runFix(check.fix_action!, check.name)}
-                            >Fix</button>
+                            >{t("Fix")}</button>
                           </Show>
                         </div>
                         <div style={{ "font-size": "12px", color: "#8b949e", "margin-top": "3px", "line-height": "1.4" }}>
@@ -577,6 +591,7 @@ export default function EnvironmentPage() {
               <div style={{ "margin-top": "20px" }}>
                 <For each={health()!.warnings}>
                   {(warning) => (
+                    // backend-emitted warnings (English) are localised by pattern below
                     <div style={{
                       display: "flex",
                       "align-items": "center",
@@ -590,7 +605,7 @@ export default function EnvironmentPage() {
                       color: "#d29922",
                     }}>
                       <span style={{ "font-size": "16px" }}>{"\u26A0"}</span>
-                      <span>{warning}</span>
+                      <span>{translateWarning(warning)}</span>
                     </div>
                   )}
                 </For>
@@ -601,21 +616,21 @@ export default function EnvironmentPage() {
             <Show when={s().ready && (machine() || health())}>
               <div style={{ "margin-top": "24px" }}>
                 <div style={{ "font-size": "13px", "font-weight": "600", color: "#8b949e", "text-transform": "uppercase", "letter-spacing": "0.5px", "margin-bottom": "12px" }}>
-                  System Info
+                  {t("System Info")}
                 </div>
                 <div style={{ display: "grid", "grid-template-columns": "repeat(auto-fill, minmax(320px, 1fr))", gap: "12px" }}>
                   <Show when={machine()}>
                     {(m) => (
                       <div style={{ background: "rgba(22, 27, 34, 0.5)", border: "1px solid rgba(255,255,255,0.06)", "border-radius": "10px", padding: "16px 18px" }}>
-                        <div style={{ "font-weight": "600", "font-size": "13px", "margin-bottom": "10px" }}>Runtime</div>
+                        <div style={{ "font-weight": "600", "font-size": "13px", "margin-bottom": "10px" }}>{t("Runtime")}</div>
                         <div class="card-grid" style={{ "font-size": "12px" }}>
-                          <span class="card-label">Backend</span>
+                          <span class="card-label">{t("Backend")}</span>
                           <span class="card-value">{m().backend} · {m().config.runtime}</span>
-                          <span class="card-label">State</span>
-                          <span class={`state-badge ${m().state === "Running" ? "state-running" : "state-stopped"}`}>{m().state}</span>
-                          <span class="card-label">CPUs</span>
+                          <span class="card-label">{t("State")}</span>
+                          <span class={`state-badge ${m().state === "Running" ? "state-running" : "state-stopped"}`}>{t(m().state)}</span>
+                          <span class="card-label">{t("CPUs")}</span>
                           <span class="card-value">{m().config.cpus}</span>
-                          <span class="card-label">Memory</span>
+                          <span class="card-label">{t("Memory")}</span>
                           <span class="card-value">{formatBytes(m().config.memory_mb * 1024 * 1024)}</span>
                         </div>
                       </div>
@@ -624,13 +639,13 @@ export default function EnvironmentPage() {
                   <Show when={health()?.system_resources}>
                     {(res) => (
                       <div style={{ background: "rgba(22, 27, 34, 0.5)", border: "1px solid rgba(255,255,255,0.06)", "border-radius": "10px", padding: "16px 18px" }}>
-                        <div style={{ "font-weight": "600", "font-size": "13px", "margin-bottom": "10px" }}>Resources</div>
+                        <div style={{ "font-weight": "600", "font-size": "13px", "margin-bottom": "10px" }}>{t("Resources")}</div>
                         <div class="card-grid" style={{ "font-size": "12px" }}>
-                          <span class="card-label">Memory</span>
+                          <span class="card-label">{t("Memory")}</span>
                           <span class="card-value">
                             {formatBytes(res().memory_total_bytes - res().memory_available_bytes)} / {formatBytes(res().memory_total_bytes)}
                           </span>
-                          <span class="card-label">Disk</span>
+                          <span class="card-label">{t("Disk")}</span>
                           <span class="card-value">
                             {formatBytes(res().disk_total_bytes - res().disk_free_bytes)} / {formatBytes(res().disk_total_bytes)}
                             <span style={{ color: "#6e7681", "margin-left": "4px" }}>({res().disk_usage_percent.toFixed(0)}%)</span>
@@ -657,16 +672,16 @@ export default function EnvironmentPage() {
                 padding: "32px",
               }}>
                 <div style={{ "font-size": "24px", "font-weight": "700", "margin-bottom": "8px", color: "var(--text-primary)" }}>
-                  {s().ready ? "Docker Connection Issue" : "Container Runtime Setup"}
+                  {s().ready ? t("Docker Connection Issue") : t("Container Runtime Setup")}
                 </div>
                 <div style={{ "font-size": "14px", color: "var(--text-muted)", "margin-bottom": "24px", "line-height": "1.5" }}>
                   {s().ready
-                    ? "Docker is installed but Orca can't connect to it. Try restarting the Orca daemon or Docker service."
+                    ? t("Docker is installed but Orca can't connect to it. Try restarting the Orca daemon or Docker service.")
                     : s().platform === "macos"
-                    ? "Set up a container runtime to get started. Orca uses a lightweight Linux VM via Lima on macOS."
+                    ? t("Set up a container runtime to get started. Orca uses a lightweight Linux VM via Lima on macOS.")
                     : s().platform === "windows"
-                    ? "Set up Docker in WSL2 to get started. Orca manages containers via the Windows Subsystem for Linux."
-                    : "Set up a container runtime to get started. Install Docker or Podman on your system."}
+                    ? t("Set up Docker in WSL2 to get started. Orca manages containers via the Windows Subsystem for Linux.")
+                    : t("Set up a container runtime to get started. Install Docker or Podman on your system.")}
                 </div>
 
                 <div style={{ display: "flex", "flex-direction": "column", gap: "12px" }}>
@@ -701,10 +716,10 @@ export default function EnvironmentPage() {
                           </div>
                         </div>
                         <Show when={check.fix_action && check.status !== "Pass"}>
-                          <button class="btn btn-primary" disabled={actionRunning()} onClick={() => runFix(check.fix_action!, check.name)} style={{ "flex-shrink": "0" }}>Install</button>
+                          <button class="btn btn-primary" disabled={actionRunning()} onClick={() => runFix(check.fix_action!, check.name)} style={{ "flex-shrink": "0" }}>{t("Install")}</button>
                         </Show>
                         <Show when={check.status === "Pass"}>
-                          <span style={{ color: "#3fb950", "font-size": "12px", "font-weight": "600", "flex-shrink": "0" }}>Done</span>
+                          <span style={{ color: "#3fb950", "font-size": "12px", "font-weight": "600", "flex-shrink": "0" }}>{t("Done")}</span>
                         </Show>
                       </div>
                     )}
@@ -713,7 +728,7 @@ export default function EnvironmentPage() {
 
                 <Show when={s().checks.filter(c => c.fix_action && c.status !== "Pass").length === 0 && !s().ready}>
                   <div style={{ "margin-top": "16px", "font-size": "13px", color: "var(--text-muted)", "text-align": "center" }}>
-                    Or install Docker manually, then click Re-check.
+                    {t("Or install Docker manually, then click Re-check.")}
                   </div>
                 </Show>
               </div>
@@ -733,14 +748,14 @@ export default function EnvironmentPage() {
               <span class="modal-title">
                 <Show when={diagnoseRunning()} fallback={
                   <Show when={diagnoseResult()} fallback={
-                    <Show when={diagnoseResult() === false} fallback={<span>Connection Diagnostics</span>}>
-                      <span style={{ color: "#f85149" }}>Connection failed</span>
+                    <Show when={diagnoseResult() === false} fallback={<span>{t("Connection Diagnostics")}</span>}>
+                      <span style={{ color: "#f85149" }}>{t("Connection failed")}</span>
                     </Show>
                   }>
-                    <span style={{ color: "#3fb950" }}>Connection available</span>
+                    <span style={{ color: "#3fb950" }}>{t("Connection available")}</span>
                   </Show>
                 }>
-                  <span>Testing connections...</span>
+                  <span>{t("Testing connections...")}</span>
                 </Show>
               </span>
               <Show when={!diagnoseRunning()}>
@@ -765,8 +780,8 @@ export default function EnvironmentPage() {
             </div>
             <div class="modal-footer">
               <Show when={!diagnoseRunning()}>
-                <button class="btn" onClick={() => setDiagnoseOpen(false)}>Close</button>
-                <button class="btn btn-primary" onClick={runDiagnose}>Retry</button>
+                <button class="btn" onClick={() => setDiagnoseOpen(false)}>{t("Close")}</button>
+                <button class="btn btn-primary" onClick={runDiagnose}>{t("Retry")}</button>
               </Show>
             </div>
           </div>
@@ -786,7 +801,7 @@ export default function EnvironmentPage() {
                     <span style={{ color: "#3fb950" }}>{"\u2713"} {actionName()} complete</span>
                   </Show>
                 }>
-                  <span>Installing {actionName()}...</span>
+                  <span>{t("Installing {name}...", { name: actionName() })}</span>
                 </Show>
               </span>
               <Show when={!actionRunning()}>
@@ -811,10 +826,10 @@ export default function EnvironmentPage() {
             </div>
             <div class="modal-footer">
               <Show when={!actionRunning()}>
-                <button class="btn btn-primary" onClick={closeActionDialog}>Close</button>
+                <button class="btn btn-primary" onClick={closeActionDialog}>{t("Close")}</button>
               </Show>
               <Show when={actionRunning()}>
-                <span style={{ "font-size": "12px", color: "var(--text-muted)" }}>This may take several minutes...</span>
+                <span style={{ "font-size": "12px", color: "var(--text-muted)" }}>{t("This may take several minutes...")}</span>
               </Show>
             </div>
           </div>

@@ -1,4 +1,5 @@
 import { createSignal, onMount, For, Show } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import type { GatewayStatus, GatewayRoute, Container, ComposeProject, StackLinkGroup, TraefikStatus } from "../lib/types";
@@ -23,7 +24,7 @@ function friendlyStartError(raw: string): string {
     return "Could not download caddy:2-alpine. Check your internet connection.";
   }
   if (raw.includes("admin API") || raw.includes("not responding")) {
-    return "Gateway started but Caddy is not responding. Check Settings > About > Daemon Log.";
+    return t("Gateway started but Caddy is not responding. Check Settings > About > Daemon Log.");
   }
   return raw;
 }
@@ -113,9 +114,9 @@ export default function GatewayPage(props: GatewayPageProps) {
         customCert: cfgCustomCert() || null,
         customKey: cfgCustomKey() || null,
       });
-      showToast("Gateway configuration saved", "success");
+      showToast(t("Gateway configuration saved"), "success");
     } catch (e) {
-      showToast(`Failed to save: ${e}`, "error");
+      showToast(t("Failed to save: {error}", { error: String(e) }), "error");
     }
     setCfgSaving(false);
   };
@@ -127,7 +128,7 @@ export default function GatewayPage(props: GatewayPageProps) {
       const httpsP = parseInt(cfgHttpsPort(), 10) || 443;
       const result = (await invoke("gateway_check_ports", { httpPort: httpP, httpsPort: httpsP })) as { conflicts: string[] };
       setPortConflicts(result.conflicts || []);
-      if (result.conflicts.length === 0) showToast("Ports are available", "success");
+      if (result.conflicts.length === 0) showToast(t("Ports are available"), "success");
     } catch {}
     setCheckingPorts(false);
   };
@@ -194,13 +195,13 @@ export default function GatewayPage(props: GatewayPageProps) {
         traefikHttpPort: parseInt(traefikHttpPort(), 10) || 30080,
         traefikHttpsPort: parseInt(traefikHttpsPort(), 10) || 30443,
       });
-      showToast("Traefik integration mode updated", "success");
+      showToast(t("Traefik integration mode updated"), "success");
       // Successfully persisted — form is no longer dirty, safe to re-prime.
       setTraefikFormDirty(false);
       await fetchTraefikStatus();
     } catch (e) {
       logError(`Failed to set Traefik mode: ${e}`);
-      showToast(`Failed: ${e}`, "error");
+      showToast(t("Failed: {error}", { error: String(e) }), "error");
     } finally {
       setApplyingTraefik(false);
     }
@@ -246,9 +247,9 @@ export default function GatewayPage(props: GatewayPageProps) {
     const domain = status()?.domain || "localhost";
     try {
       await invoke("gateway_add_route", { hostname: `${hostname}.${domain}`, containerName: c.name, port });
-      showToast(`Added ${hostname}.${domain}`, "success");
+      showToast(t("Added {hostname}", { hostname: `${hostname}.${domain}` }), "success");
       refresh();
-    } catch (e) { showToast(`Failed: ${e}`, "error"); }
+    } catch (e) { showToast(t("Failed: {error}", { error: String(e) }), "error"); }
   };
 
   const dismissAllPorts = async (container: Container) => {
@@ -271,9 +272,9 @@ export default function GatewayPage(props: GatewayPageProps) {
     try {
       await invoke("gateway_clear_dismissed");
       setDismissedKeys([]);
-      showToast("Dismissed suggestions cleared", "success");
+      showToast(t("Dismissed suggestions cleared"), "success");
     } catch (e) {
-      showToast(`Failed to clear: ${e}`, "error");
+      showToast(t("Failed to clear: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -294,13 +295,13 @@ export default function GatewayPage(props: GatewayPageProps) {
     setStartError(null);
     try {
       await invoke("gateway_start");
-      showToast("Gateway started", "success");
+      showToast(t("Gateway started"), "success");
       await refresh();
     } catch (e) {
       const raw = String(e);
       const friendly = friendlyStartError(raw);
       logError(`Failed to start gateway: ${raw}`);
-      showToast(`Failed to start gateway: ${friendly}`, "error");
+      showToast(t("Failed to start gateway: {error}", { error: friendly }), "error");
       setStartError(friendly);
     }
     setStarting(false);
@@ -309,12 +310,12 @@ export default function GatewayPage(props: GatewayPageProps) {
   const handleStop = async () => {
     try {
       await invoke("gateway_stop");
-      showToast("Gateway stopped", "success");
+      showToast(t("Gateway stopped"), "success");
       setStartError(null);
       await refresh();
     } catch (e) {
       logError(`Failed to stop gateway: ${e}`);
-      showToast(`Failed to stop gateway: ${e}`, "error");
+      showToast(t("Failed to stop gateway: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -346,25 +347,25 @@ export default function GatewayPage(props: GatewayPageProps) {
         port,
         path: addPath().trim() || null,
       });
-      showToast(`Route added: ${fullHostname}`, "success");
+      showToast(t("Route added: {hostname}", { hostname: fullHostname }), "success");
       setShowAdd(false);
       await refresh();
     } catch (e) {
       logError(`Failed to add route: ${e}`);
-      showToast(`Failed to add route: ${e}`, "error");
+      showToast(t("Failed to add route: {error}", { error: String(e) }), "error");
     }
     setAdding(false);
   };
 
   const handleRemoveRoute = async (hostname: string) => {
-    if (!(await confirmDanger("Remove Route", `Remove route for "${hostname}"?`))) return;
+    if (!(await confirmDanger(t("Remove Route"), t("Remove route for \"{hostname}\"?", { hostname })))) return;
     try {
       await invoke("gateway_remove_route", { hostname });
-      showToast(`Route "${hostname}" removed`, "success");
+      showToast(t("Route \"{hostname}\" removed", { hostname }), "success");
       await refresh();
     } catch (e) {
       logError(`Failed to remove route: ${e}`);
-      showToast(`Failed to remove route: ${e}`, "error");
+      showToast(t("Failed to remove route: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -385,17 +386,17 @@ export default function GatewayPage(props: GatewayPageProps) {
     // removed and the new one failed to add.
     const rawHostname = editHostname().trim();
     if (!rawHostname) {
-      showToast("Hostname is required", "error");
+      showToast(t("Hostname is required"), "error");
       return;
     }
     const containerName = editContainer().trim();
     if (!containerName) {
-      showToast("Container is required", "error");
+      showToast(t("Container is required"), "error");
       return;
     }
     const port = parseInt(editPort(), 10);
     if (isNaN(port) || port < 1 || port > 65535) {
-      showToast("Port must be between 1 and 65535", "error");
+      showToast(t("Port must be between 1 and 65535"), "error");
       return;
     }
     const domain = status()?.domain || "localhost";
@@ -431,18 +432,18 @@ export default function GatewayPage(props: GatewayPageProps) {
           // user can clean up manually rather than silently leaving a
           // duplicate.
           logError(`Added new route but failed to remove old "${original.hostname}": ${removeErr}`);
-          showToast(`New route added but failed to remove old "${original.hostname}" — remove it manually`, "error");
+          showToast(t("New route added but failed to remove old \"{hostname}\" — remove it manually", { hostname: original.hostname }), "error");
           setEditRoute(null);
           setEditSaving(false);
           await refresh();
           return;
         }
       }
-      showToast("Route updated", "success");
+      showToast(t("Route updated"), "success");
       setEditRoute(null);
       await refresh();
     } catch (e) {
-      showToast(`Failed to update: ${e}`, "error");
+      showToast(t("Failed to update: {error}", { error: String(e) }), "error");
     }
     setEditSaving(false);
   };
@@ -458,7 +459,7 @@ export default function GatewayPage(props: GatewayPageProps) {
       await refresh();
     } catch (e) {
       logError(`Failed to toggle route: ${e}`);
-      showToast(`Failed to toggle route: ${e}`, "error");
+      showToast(t("Failed to toggle route: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -597,43 +598,43 @@ export default function GatewayPage(props: GatewayPageProps) {
   return (
     <div>
       <div class="page-header">
-        <h1 class="page-title">Gateway</h1>
+        <h1 class="page-title">{t("Gateway")}</h1>
         <div class="page-actions">
           <Show when={status()?.running}>
-            <button class="btn" onClick={() => openUrl(landingUrl())} title="Open gateway landing page in browser">
+            <button class="btn" onClick={() => openUrl(landingUrl())} title={t("Open gateway landing page in browser")}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={{ "margin-right": "4px", "vertical-align": "-2px" }}>
                 <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
               </svg>
-              Open Gateway
+              {t("Open Gateway")}
             </button>
             <button class="btn" onClick={openAddDialog}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={{ "margin-right": "4px", "vertical-align": "-2px" }}>
                 <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
               </svg>
-              Add Route
+              {t("Add Route")}
             </button>
           </Show>
           <Show
             when={status()?.running}
             fallback={
               <button class="btn btn-primary" onClick={handleStart} disabled={starting()}>
-                {starting() ? "Starting..." : "Start Gateway"}
+                {starting() ? t("Starting...") : t("Start Gateway")}
               </button>
             }
           >
             <button class="btn" onClick={handleStop} style={{ color: "#f85149", "border-color": "#f85149" }}>
-              Stop Gateway
+              {t("Stop Gateway")}
             </button>
           </Show>
-          <button class="btn" onClick={refresh}>Refresh</button>
+          <button class="btn" onClick={refresh}>{t("Refresh")}</button>
         </div>
       </div>
 
       {/* Tab bar */}
       <div class="tab-bar" style={{ "margin-bottom": "24px" }}>
-        <button class={`tab-item ${activeTab() === "routes" ? "active" : ""}`} onClick={() => setActiveTab("routes")}>Routes</button>
-        <button class={`tab-item ${activeTab() === "configuration" ? "active" : ""}`} onClick={() => setActiveTab("configuration")}>Configuration</button>
-        <button class={`tab-item ${activeTab() === "settings" ? "active" : ""}`} onClick={() => setActiveTab("settings")}>Settings</button>
+        <button class={`tab-item ${activeTab() === "routes" ? "active" : ""}`} onClick={() => setActiveTab("routes")}>{t("Routes")}</button>
+        <button class={`tab-item ${activeTab() === "configuration" ? "active" : ""}`} onClick={() => setActiveTab("configuration")}>{t("Configuration")}</button>
+        <button class={`tab-item ${activeTab() === "settings" ? "active" : ""}`} onClick={() => setActiveTab("settings")}>{t("Settings")}</button>
       </div>
 
       {/* Port conflict warnings (visible across all tabs) */}
@@ -654,12 +655,12 @@ export default function GatewayPage(props: GatewayPageProps) {
             <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
           <div>
-            <div style={{ "font-weight": "600", "margin-bottom": "4px" }}>Port Conflict Detected</div>
+            <div style={{ "font-weight": "600", "margin-bottom": "4px" }}>{t("Port Conflict Detected")}</div>
             <For each={status()?.port_conflicts ?? []}>
               {(conflict) => <div>{conflict}</div>}
             </For>
             <div style={{ "margin-top": "4px", "font-size": "12px", color: "#8b949e" }}>
-              Change the port in the Configuration tab or stop the conflicting service.
+              {t("Change the port in the Configuration tab or stop the conflicting service.")}
             </div>
           </div>
         </div>
@@ -683,13 +684,13 @@ export default function GatewayPage(props: GatewayPageProps) {
             <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
           </svg>
           <div>
-            <div style={{ "font-weight": "600", "margin-bottom": "4px" }}>Failed to Start Gateway</div>
+            <div style={{ "font-weight": "600", "margin-bottom": "4px" }}>{t("Failed to Start Gateway")}</div>
             <div style={{ color: "#e6edf3" }}>{startError()}</div>
           </div>
           <button
             style={{ "margin-left": "auto", background: "none", border: "none", cursor: "pointer", color: "#8b949e", "flex-shrink": "0" }}
             onClick={() => setStartError(null)}
-            title="Dismiss"
+            title={t("Dismiss")}
           >
             {"\u00d7"}
           </button>
@@ -710,7 +711,7 @@ export default function GatewayPage(props: GatewayPageProps) {
             <div class="card" style={{ "margin-bottom": "20px" }}>
               <div style={{ display: "grid", "grid-template-columns": "repeat(4, 1fr)", gap: "16px 24px", "font-size": "13px" }}>
                 <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-                  <span class="card-label">Status</span>
+                  <span class="card-label">{t("Status")}</span>
                   <span class="card-value" style={{ display: "inline-flex", "align-items": "center", gap: "6px" }}>
                     <span style={{
                       display: "inline-block",
@@ -719,31 +720,31 @@ export default function GatewayPage(props: GatewayPageProps) {
                       "border-radius": "50%",
                       background: "#3fb950",
                     }} />
-                    Running
+                    {t("Running")}
                   </span>
                 </div>
                 <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-                  <span class="card-label">Domain</span>
+                  <span class="card-label">{t("Domain")}</span>
                   <span class="card-value">*.{s().domain}</span>
                 </div>
                 <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-                  <span class="card-label">TLS</span>
-                  <span class="card-value">{s().tls_mode === "orca_ca" ? "Orca CA" : "Custom"}</span>
+                  <span class="card-label">{t("TLS")}</span>
+                  <span class="card-value">{s().tls_mode === "orca_ca" ? t("Orca CA") : t("Custom")}</span>
                 </div>
                 <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-                  <span class="card-label">Routes</span>
+                  <span class="card-label">{t("Routes")}</span>
                   <span class="card-value">{s().routes_active} active</span>
                 </div>
                 <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-                  <span class="card-label">HTTP Port</span>
+                  <span class="card-label">{t("HTTP Port")}</span>
                   <span class="card-value mono">:{s().http_port}</span>
                 </div>
                 <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-                  <span class="card-label">HTTPS Port</span>
+                  <span class="card-label">{t("HTTPS Port")}</span>
                   <span class="card-value mono">:{s().https_port}</span>
                 </div>
                 <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-                  <span class="card-label">Landing Page</span>
+                  <span class="card-label">{t("Landing Page")}</span>
                   <span class="card-value">
                     <button
                       class="btn-link"
@@ -756,7 +757,7 @@ export default function GatewayPage(props: GatewayPageProps) {
                 </div>
                 <Show when={s().container_id}>
                   <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-                    <span class="card-label">Container ID</span>
+                    <span class="card-label">{t("Container ID")}</span>
                     <span class="card-value mono" style={{ "font-size": "11px" }}>{s().container_id?.substring(0, 12)}</span>
                   </div>
                 </Show>
@@ -778,10 +779,10 @@ export default function GatewayPage(props: GatewayPageProps) {
                       <line x1="2" y1="12" x2="22" y2="12" />
                       <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
                     </svg>
-                    <h2 style={{ color: "#e6edf3", "font-size": "16px", "font-weight": "600", margin: "0" }}>Orca Gateway</h2>
+                    <h2 style={{ color: "#e6edf3", "font-size": "16px", "font-weight": "600", margin: "0" }}>{t("Orca Gateway")}</h2>
                   </div>
                   <p style={{ color: "#8b949e", "font-size": "13px", "line-height": "1.6", margin: "0 0 16px 0" }}>
-                    Orca Gateway is a managed reverse proxy that gives your containers clean hostnames with automatic TLS.
+                    {t("Orca Gateway is a managed reverse proxy that gives your containers clean hostnames with automatic TLS.")}
                   </p>
                   <div style={{
                     background: "#161b22",
@@ -792,24 +793,24 @@ export default function GatewayPage(props: GatewayPageProps) {
                     "font-size": "13px",
                     "line-height": "1.8",
                   }}>
-                    <div style={{ color: "#8b949e" }}>Instead of: <span style={{ color: "#f85149" }}>http://localhost:8095</span></div>
-                    <div style={{ color: "#8b949e" }}>Access at: <span style={{ color: "#3fb950" }}>https://webmail.localhost</span></div>
+                    <div style={{ color: "#8b949e" }}>{t("Instead of:")} <span style={{ color: "#f85149" }}>http://localhost:8095</span></div>
+                    <div style={{ color: "#8b949e" }}>{t("Access at:")} <span style={{ color: "#3fb950" }}>https://webmail.localhost</span></div>
                   </div>
                   <div style={{ display: "flex", "flex-direction": "column", gap: "8px", color: "#c9d1d9", "font-size": "13px" }}>
                     <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-                      <span style={{ color: "#3fb950" }}>&#x2022;</span> Automatic HTTPS via the Orca Certificate Authority
+                      <span style={{ color: "#3fb950" }}>&#x2022;</span> {t("Automatic HTTPS via the Orca Certificate Authority")}
                     </div>
                     <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
                       <span style={{ color: "#3fb950" }}>&#x2022;</span> .localhost domains work in all browsers
                     </div>
                     <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-                      <span style={{ color: "#3fb950" }}>&#x2022;</span> Custom domains for teams (*.local.company.dev)
+                      <span style={{ color: "#3fb950" }}>&#x2022;</span> {t("Custom domains for teams (*.local.company.dev)")}
                     </div>
                     <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-                      <span style={{ color: "#3fb950" }}>&#x2022;</span> WebSocket, SSE, HTTP/2 proxied transparently
+                      <span style={{ color: "#3fb950" }}>&#x2022;</span> {t("WebSocket, SSE, HTTP/2 proxied transparently")}
                     </div>
                     <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-                      <span style={{ color: "#3fb950" }}>&#x2022;</span> orca.yaml in your repo auto-registers routes
+                      <span style={{ color: "#3fb950" }}>&#x2022;</span> {t("orca.yaml in your repo auto-registers routes")}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: "8px", "margin-top": "20px" }}>
@@ -821,7 +822,7 @@ export default function GatewayPage(props: GatewayPageProps) {
               </div>
 
               <div class="card">
-                <h3 style={{ color: "#e6edf3", "font-size": "14px", "font-weight": "600", margin: "0 0 12px 0" }}>Prerequisites</h3>
+                <h3 style={{ color: "#e6edf3", "font-size": "14px", "font-weight": "600", margin: "0 0 12px 0" }}>{t("Prerequisites")}</h3>
                 <div style={{ display: "flex", "flex-direction": "column", gap: "10px", color: "#c9d1d9", "font-size": "13px" }}>
                   <div style={{ display: "flex", gap: "10px" }}>
                     <span style={{ color: "#58a6ff", "font-weight": "600", "flex-shrink": "0" }}>1.</span>
@@ -832,17 +833,17 @@ export default function GatewayPage(props: GatewayPageProps) {
                         style={{ color: "#58a6ff", background: "none", border: "none", cursor: "pointer", "font-size": "13px", padding: "0" }}
                         onClick={() => props.onNavigate?.("settings:certificates")}
                       >
-                        Settings &rarr; Certificates &rarr; Download CA
+                        {t("Settings → Certificates → Download CA")}
                       </button>
                     </span>
                   </div>
                   <div style={{ display: "flex", gap: "10px" }}>
                     <span style={{ color: "#58a6ff", "font-weight": "600", "flex-shrink": "0" }}>2.</span>
-                    <span>Start the Gateway (pulls caddy:2-alpine, ~40MB)</span>
+                    <span>{t("Start the Gateway (pulls caddy:2-alpine, ~40MB)")}</span>
                   </div>
                   <div style={{ display: "flex", gap: "10px" }}>
                     <span style={{ color: "#58a6ff", "font-weight": "600", "flex-shrink": "0" }}>3.</span>
-                    <span>Expose containers via the container detail page or here</span>
+                    <span>{t("Expose containers via the container detail page or here")}</span>
                   </div>
                 </div>
               </div>
@@ -860,10 +861,10 @@ export default function GatewayPage(props: GatewayPageProps) {
                     <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
                   </svg>
                 </div>
-                <p class="empty-title">No routes configured</p>
-                <p>Add a route to map a hostname to a running container.</p>
+                <p class="empty-title">{t("No routes configured")}</p>
+                <p>{t("Add a route to map a hostname to a running container.")}</p>
                 <button class="btn btn-primary" onClick={openAddDialog} style={{ "margin-top": "12px" }}>
-                  Add Route
+                  {t("Add Route")}
                 </button>
               </div>
             }
@@ -871,11 +872,11 @@ export default function GatewayPage(props: GatewayPageProps) {
             <table class="table">
               <thead>
                 <tr>
-                  <th>Hostname</th>
-                  <th>Container</th>
-                  <th>Port</th>
-                  <th>Status</th>
-                  <th style={{ "text-align": "right" }}>Actions</th>
+                  <th>{t("Hostname")}</th>
+                  <th>{t("Container")}</th>
+                  <th>{t("Port")}</th>
+                  <th>{t("Status")}</th>
+                  <th style={{ "text-align": "right" }}>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -909,13 +910,13 @@ export default function GatewayPage(props: GatewayPageProps) {
                             "border-radius": "50%",
                             background: route.enabled ? "#3fb950" : "#8b949e",
                           }} />
-                          {route.enabled ? "Active" : "Disabled"}
+                          {route.enabled ? t("Active") : t("Disabled")}
                         </span>
                       </td>
                       <td style={{ "text-align": "right" }}>
                         <button
                           class="action-icon"
-                          title={route.enabled ? "Pause route" : "Resume route"}
+                          title={route.enabled ? t("Pause route") : t("Resume route")}
                           onClick={() => handleToggleRoute(route)}
                           style={{ "margin-right": "4px", color: route.enabled ? "#3fb950" : "#484f58" }}
                         >
@@ -923,7 +924,7 @@ export default function GatewayPage(props: GatewayPageProps) {
                         </button>
                         <button
                           class="action-icon"
-                          title="Edit route"
+                          title={t("Edit route")}
                           onClick={() => openEditRoute(route)}
                           style={{ "margin-right": "4px" }}
                         >
@@ -931,7 +932,7 @@ export default function GatewayPage(props: GatewayPageProps) {
                         </button>
                         <button
                           class="action-icon action-icon-delete"
-                          title="Remove route"
+                          title={t("Remove route")}
                           onClick={() => handleRemoveRoute(route.hostname)}
                           style={{ color: "#f85149" }}
                         >
@@ -949,8 +950,8 @@ export default function GatewayPage(props: GatewayPageProps) {
         {/* Suggested Routes */}
         <Show when={status()?.running && suggestions().length > 0}>
           <div style={{ "margin-top": "20px" }}>
-            <h3 style={{ color: "#e6edf3", "font-size": "14px", "font-weight": "600", "margin-bottom": "4px" }}>Suggested Routes</h3>
-            <p style={{ color: "#6e7681", "font-size": "12px", "margin-bottom": "12px" }}>Containers with exposed ports not yet in the gateway</p>
+            <h3 style={{ color: "#e6edf3", "font-size": "14px", "font-weight": "600", "margin-bottom": "4px" }}>{t("Suggested Routes")}</h3>
+            <p style={{ color: "#6e7681", "font-size": "12px", "margin-bottom": "12px" }}>{t("Containers with exposed ports not yet in the gateway")}</p>
             <div style={{ display: "flex", "flex-direction": "column", gap: "6px" }}>
               <For each={suggestions()}>
                 {(container) => (
@@ -983,10 +984,10 @@ export default function GatewayPage(props: GatewayPageProps) {
                       </For>
                     </div>
                     <button class="btn btn-sm btn-primary" onClick={() => quickAdd(container)} style={{ "flex-shrink": "0", "white-space": "nowrap", "font-size": "12px", padding: "4px 12px" }}>
-                      Add to Gateway
+                      {t("Add to Gateway")}
                     </button>
                     <button
-                      title="Dismiss suggestion"
+                      title={t("Dismiss suggestion")}
                       onClick={() => dismissAllPorts(container)}
                       style={{
                         background: "none",
@@ -1016,13 +1017,13 @@ export default function GatewayPage(props: GatewayPageProps) {
                 <circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" />
               </svg>
               <span>
-                Install the Orca CA certificate to trust HTTPS connections.{" "}
+                {t("Install the Orca CA certificate to trust HTTPS connections.")}{" "}
                 <button
                   class="btn-link"
                   style={{ color: "#58a6ff", background: "none", border: "none", cursor: "pointer", "font-size": "12px", padding: "0" }}
                   onClick={() => props.onNavigate?.("settings:certificates")}
                 >
-                  Settings &rarr; Certificates
+                  {t("Settings → Certificates")}
                 </button>
               </span>
             </div>
@@ -1032,7 +1033,7 @@ export default function GatewayPage(props: GatewayPageProps) {
         {/* Environment Links (read-only) */}
         <Show when={status()?.running && stackLinks().length > 0}>
           <div style={{ "margin-top": "24px" }}>
-            <h3 style={{ color: "#e6edf3", "font-size": "14px", "font-weight": "600", "margin-bottom": "12px" }}>Environment Links</h3>
+            <h3 style={{ color: "#e6edf3", "font-size": "14px", "font-weight": "600", "margin-bottom": "12px" }}>{t("Environment Links")}</h3>
 
             <Show when={allEnvNames().length > 1}>
               <div style={{ display: "flex", gap: "4px", "margin-bottom": "16px", "flex-wrap": "wrap" }}>
@@ -1164,7 +1165,7 @@ export default function GatewayPage(props: GatewayPageProps) {
                                   <Show when={resolved()}>
                                     <button
                                       class="action-icon"
-                                      title="Open in browser"
+                                      title={t("Open in browser")}
                                       onClick={() => openUrl(resolved())}
                                       style={{ "flex-shrink": "0" }}
                                     >
@@ -1188,7 +1189,7 @@ export default function GatewayPage(props: GatewayPageProps) {
             </div>
 
             <p style={{ "font-size": "11px", color: "#6e7681", "margin-top": "10px" }}>
-              Environment links are configured in your project's <code style={{ background: "#161b22", padding: "2px 6px", "border-radius": "4px", "font-size": "11px" }}>orca.yaml</code>
+              {t("Environment links are configured in your project's")} <code style={{ background: "#161b22", padding: "2px 6px", "border-radius": "4px", "font-size": "11px" }}>orca.yaml</code>
             </p>
           </div>
         </Show>
@@ -1199,19 +1200,19 @@ export default function GatewayPage(props: GatewayPageProps) {
         <Show when={cfgLoaded()} fallback={<SkeletonCard height="200px" />}>
           <div class="card" style={{ padding: "20px" }}>
             <div class="form-group">
-              <label class="form-label">Domain</label>
+              <label class="form-label">{t("Domain")}</label>
               <input class="form-input" type="text" value={cfgDomain()} onInput={(e) => setCfgDomain(e.currentTarget.value)} placeholder="localhost" />
-              <p style={{ "font-size": "11px", color: "#6e7681", "margin-top": "4px" }}>Routes will be created as subdomains (e.g., myapp.{cfgDomain()})</p>
+              <p style={{ "font-size": "11px", color: "#6e7681", "margin-top": "4px" }}>{t("Routes will be created as subdomains (e.g., myapp.{domain})", { domain: cfgDomain() })}</p>
             </div>
 
             <div style={{ display: "grid", "grid-template-columns": "1fr 1fr", gap: "12px" }}>
               <div class="form-group">
-                <label class="form-label">HTTP Port</label>
+                <label class="form-label">{t("HTTP Port")}</label>
                 <input class="form-input" type="number" value={cfgHttpPort()} onInput={(e) => setCfgHttpPort(e.currentTarget.value)} min="1" max="65535" style={httpConflict() ? { "border-color": "#d29922" } : undefined} />
                 <Show when={httpConflict()}><p style={{ "font-size": "11px", color: "#d29922", "margin-top": "4px" }}>{httpConflict()}</p></Show>
               </div>
               <div class="form-group">
-                <label class="form-label">HTTPS Port</label>
+                <label class="form-label">{t("HTTPS Port")}</label>
                 <input class="form-input" type="number" value={cfgHttpsPort()} onInput={(e) => setCfgHttpsPort(e.currentTarget.value)} min="1" max="65535" style={httpsConflict() ? { "border-color": "#d29922" } : undefined} />
                 <Show when={httpsConflict()}><p style={{ "font-size": "11px", color: "#d29922", "margin-top": "4px" }}>{httpsConflict()}</p></Show>
               </div>
@@ -1219,41 +1220,41 @@ export default function GatewayPage(props: GatewayPageProps) {
 
             <div style={{ "margin-top": "12px", "margin-bottom": "12px" }}>
               <button class="btn" onClick={checkPorts} disabled={checkingPorts()} style={{ "font-size": "12px" }}>
-                {checkingPorts() ? "Checking..." : "Check Ports"}
+                {checkingPorts() ? t("Checking...") : t("Check Ports")}
               </button>
             </div>
 
             <div class="form-group">
-              <label class="form-label">TLS Mode</label>
+              <label class="form-label">{t("TLS Mode")}</label>
               <div style={{ display: "flex", gap: "8px" }}>
-                <button class="btn" style={{ background: cfgTlsMode() === "orca_ca" ? "#1f6feb" : undefined, color: cfgTlsMode() === "orca_ca" ? "#fff" : undefined, "border-color": cfgTlsMode() === "orca_ca" ? "#1f6feb" : undefined }} onClick={() => setCfgTlsMode("orca_ca")}>Orca CA (automatic)</button>
-                <button class="btn" style={{ background: cfgTlsMode() === "custom" ? "#1f6feb" : undefined, color: cfgTlsMode() === "custom" ? "#fff" : undefined, "border-color": cfgTlsMode() === "custom" ? "#1f6feb" : undefined }} onClick={() => setCfgTlsMode("custom")}>Custom Certificate</button>
+                <button class="btn" style={{ background: cfgTlsMode() === "orca_ca" ? "#1f6feb" : undefined, color: cfgTlsMode() === "orca_ca" ? "#fff" : undefined, "border-color": cfgTlsMode() === "orca_ca" ? "#1f6feb" : undefined }} onClick={() => setCfgTlsMode("orca_ca")}>{t("Orca CA (automatic)")}</button>
+                <button class="btn" style={{ background: cfgTlsMode() === "custom" ? "#1f6feb" : undefined, color: cfgTlsMode() === "custom" ? "#fff" : undefined, "border-color": cfgTlsMode() === "custom" ? "#1f6feb" : undefined }} onClick={() => setCfgTlsMode("custom")}>{t("Custom Certificate")}</button>
               </div>
             </div>
 
             <Show when={cfgTlsMode() === "orca_ca"}>
               <div style={{ background: "#161b22", "border-radius": "6px", padding: "10px 14px", "margin-bottom": "12px", display: "flex", "align-items": "center", gap: "8px", "font-size": "12px", color: "#8b949e" }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                Install the Orca CA certificate for trusted HTTPS. <a style={{ color: "#58a6ff", "margin-left": "4px", cursor: "pointer" }} onClick={() => props.onNavigate?.("settings:certificates")}>Go to Certificates</a>
+                {t("Install the Orca CA certificate for trusted HTTPS.")} <a style={{ color: "#58a6ff", "margin-left": "4px", cursor: "pointer" }} onClick={() => props.onNavigate?.("settings:certificates")}>{t("Go to Certificates")}</a>
               </div>
             </Show>
 
             <Show when={cfgTlsMode() === "custom"}>
               <div class="form-group">
-                <label class="form-label">Certificate PEM</label>
+                <label class="form-label">{t("Certificate PEM")}</label>
                 <textarea class="form-input" rows={4} value={cfgCustomCert()} onInput={(e) => setCfgCustomCert(e.currentTarget.value)} placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"} style={{ "font-family": "monospace", "font-size": "11px" }} />
               </div>
               <div class="form-group">
-                <label class="form-label">Private Key PEM</label>
+                <label class="form-label">{t("Private Key PEM")}</label>
                 <textarea class="form-input" rows={4} value={cfgCustomKey()} onInput={(e) => setCfgCustomKey(e.currentTarget.value)} placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"} style={{ "font-family": "monospace", "font-size": "11px" }} />
               </div>
             </Show>
 
             <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", "margin-top": "16px" }}>
               <button class="btn btn-primary" onClick={saveConfig} disabled={cfgSaving()}>
-                {cfgSaving() ? "Saving..." : "Save Configuration"}
+                {cfgSaving() ? t("Saving...") : t("Save Configuration")}
               </button>
-              <span style={{ "font-size": "11px", color: "#6e7681" }}>Changes may require restarting the gateway</span>
+              <span style={{ "font-size": "11px", color: "#6e7681" }}>{t("Changes may require restarting the gateway")}</span>
             </div>
           </div>
         </Show>
@@ -1261,7 +1262,7 @@ export default function GatewayPage(props: GatewayPageProps) {
         {/* Kubernetes Integration */}
         <Show when={traefikStatus()?.traefik_detected}>
           <div style={{ "margin-top": "24px" }}>
-            <h3 style={{ "font-size": "14px", "font-weight": "600", color: "#e6edf3", "margin-bottom": "16px" }}>Kubernetes Integration</h3>
+            <h3 style={{ "font-size": "14px", "font-weight": "600", color: "#e6edf3", "margin-bottom": "16px" }}>{t("Kubernetes Integration")}</h3>
             <div style={{ display: "flex", gap: "12px", "flex-wrap": "wrap", "margin-bottom": "16px" }}>
               <div
                 class="card"
@@ -1278,10 +1279,10 @@ export default function GatewayPage(props: GatewayPageProps) {
                     border: traefikMode() === "gateway_only" ? "5px solid #1f6feb" : "2px solid #484f58",
                     "box-sizing": "border-box",
                   }} />
-                  <span style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3" }}>Gateway Only</span>
+                  <span style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3" }}>{t("Gateway Only")}</span>
                 </div>
                 <div style={{ "font-size": "12px", color: "#8b949e" }}>
-                  Gateway and Traefik run independently. Traefik keeps its default ports.
+                  {t("Gateway and Traefik run independently. Traefik keeps its default ports.")}
                 </div>
               </div>
 
@@ -1300,10 +1301,10 @@ export default function GatewayPage(props: GatewayPageProps) {
                     border: traefikMode() === "separate_ports" ? "5px solid #1f6feb" : "2px solid #484f58",
                     "box-sizing": "border-box",
                   }} />
-                  <span style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3" }}>Separate Ports</span>
+                  <span style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3" }}>{t("Separate Ports")}</span>
                 </div>
                 <div style={{ "font-size": "12px", color: "#8b949e" }}>
-                  Each listens on its own ports. Traefik moves to custom NodePorts.
+                  {t("Each listens on its own ports. Traefik moves to custom NodePorts.")}
                 </div>
               </div>
 
@@ -1322,10 +1323,10 @@ export default function GatewayPage(props: GatewayPageProps) {
                     border: traefikMode() === "gateway_proxies_traefik" ? "5px solid #1f6feb" : "2px solid #484f58",
                     "box-sizing": "border-box",
                   }} />
-                  <span style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3" }}>Gateway Proxies Traefik</span>
+                  <span style={{ "font-weight": "600", "font-size": "13px", color: "#e6edf3" }}>{t("Gateway Proxies Traefik")}</span>
                 </div>
                 <div style={{ "font-size": "12px", color: "#8b949e" }}>
-                  Single entry point. K8s ingress hostnames are auto-routed through the gateway.
+                  {t("Single entry point. K8s ingress hostnames are auto-routed through the gateway.")}
                 </div>
               </div>
             </div>
@@ -1334,11 +1335,11 @@ export default function GatewayPage(props: GatewayPageProps) {
               <div class="card" style={{ padding: "16px", "margin-bottom": "16px" }}>
                 <div style={{ display: "flex", gap: "16px", "align-items": "center" }}>
                   <div class="form-group" style={{ "margin-bottom": "0" }}>
-                    <label class="form-label" style={{ "font-size": "11px" }}>Traefik HTTP Port</label>
+                    <label class="form-label" style={{ "font-size": "11px" }}>{t("Traefik HTTP Port")}</label>
                     <input class="form-input" type="number" value={traefikHttpPort()} onInput={(e) => { setTraefikHttpPort(e.currentTarget.value); setTraefikFormDirty(true); }} style={{ width: "100px" }} />
                   </div>
                   <div class="form-group" style={{ "margin-bottom": "0" }}>
-                    <label class="form-label" style={{ "font-size": "11px" }}>Traefik HTTPS Port</label>
+                    <label class="form-label" style={{ "font-size": "11px" }}>{t("Traefik HTTPS Port")}</label>
                     <input class="form-input" type="number" value={traefikHttpsPort()} onInput={(e) => { setTraefikHttpsPort(e.currentTarget.value); setTraefikFormDirty(true); }} style={{ width: "100px" }} />
                   </div>
                 </div>
@@ -1347,7 +1348,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
             <div style={{ display: "flex", "align-items": "center", gap: "12px", "margin-bottom": "16px" }}>
               <button class="btn btn-primary" onClick={applyTraefikMode} disabled={applyingTraefik()}>
-                {applyingTraefik() ? "Applying..." : "Apply Changes"}
+                {applyingTraefik() ? t("Applying...") : t("Apply Changes")}
               </button>
               <Show when={traefikStatus()}>
                 <span style={{ "font-size": "12px", color: "#8b949e" }}>
@@ -1360,14 +1361,14 @@ export default function GatewayPage(props: GatewayPageProps) {
             <Show when={traefikMode() === "gateway_proxies_traefik" && (traefikStatus()?.k8s_ingress_hostnames?.length ?? 0) > 0}>
               <div class="card" style={{ padding: "16px" }}>
                 <div style={{ "font-size": "12px", "font-weight": "600", color: "#e6edf3", "margin-bottom": "8px" }}>
-                  Auto-discovered K8s Ingress Hostnames
+                  {t("Auto-discovered K8s Ingress Hostnames")}
                 </div>
                 <table class="table" style={{ "margin-bottom": "0" }}>
                   <thead>
                     <tr>
-                      <th>Hostname</th>
-                      <th>Namespace</th>
-                      <th>Ingress</th>
+                      <th>{t("Hostname")}</th>
+                      <th>{t("Namespace")}</th>
+                      <th>{t("Ingress")}</th>
                       <th />
                     </tr>
                   </thead>
@@ -1399,15 +1400,15 @@ export default function GatewayPage(props: GatewayPageProps) {
       {/* ============ TAB 3: Settings ============ */}
       <Show when={activeTab() === "settings"}>
         <div class="card" style={{ padding: "20px" }}>
-          <h3 style={{ color: "#e6edf3", "font-size": "14px", "font-weight": "600", margin: "0 0 16px 0" }}>Gateway Settings</h3>
+          <h3 style={{ color: "#e6edf3", "font-size": "14px", "font-weight": "600", margin: "0 0 16px 0" }}>{t("Gateway Settings")}</h3>
 
           {/* Clear dismissed suggestions */}
           <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", padding: "12px 0", "border-bottom": "1px solid #21262d" }}>
             <div>
-              <div style={{ color: "#e6edf3", "font-size": "13px", "font-weight": "500" }}>Dismissed Suggestions</div>
+              <div style={{ color: "#e6edf3", "font-size": "13px", "font-weight": "500" }}>{t("Dismissed Suggestions")}</div>
               <div style={{ color: "#8b949e", "font-size": "12px", "margin-top": "2px" }}>
                 {dismissedKeys().length === 0
-                  ? "No dismissed suggestions"
+                  ? t("No dismissed suggestions")
                   : `${dismissedKeys().length} suggestion${dismissedKeys().length === 1 ? "" : "s"} dismissed`}
               </div>
             </div>
@@ -1417,14 +1418,14 @@ export default function GatewayPage(props: GatewayPageProps) {
               onClick={clearDismissed}
               disabled={dismissedKeys().length === 0}
             >
-              Clear Dismissed
+              {t("Clear Dismissed")}
             </button>
           </div>
 
           {/* Info note */}
           <div style={{ "margin-top": "16px", background: "#161b22", "border-radius": "6px", padding: "10px 14px", display: "flex", "align-items": "center", gap: "8px", "font-size": "12px", color: "#8b949e" }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-            Gateway-specific settings. For general configuration (domain, ports, TLS), use the Configuration tab.
+            {t("Gateway-specific settings. For general configuration (domain, ports, TLS), use the Configuration tab.")}
           </div>
         </div>
       </Show>
@@ -1434,7 +1435,7 @@ export default function GatewayPage(props: GatewayPageProps) {
         <div class="modal-overlay" onMouseDown={handleOverlayMouseDown} onClick={handleOverlayClick}>
           <div class="modal-dialog">
             <div class="modal-header">
-              <h2 class="modal-title">Add Route</h2>
+              <h2 class="modal-title">{t("Add Route")}</h2>
               <button class="modal-close" onClick={() => setShowAdd(false)}>
                 {"\u00d7"}
               </button>
@@ -1442,11 +1443,11 @@ export default function GatewayPage(props: GatewayPageProps) {
             <form onSubmit={handleAddRoute}>
               <div class="modal-body">
                 <p style={{ "font-size": "12px", color: "#8b949e", "margin-bottom": "16px", "line-height": "1.6" }}>
-                  Map a hostname to a container's internal port. The Gateway serves it over HTTPS on ports {status()?.http_port || 80}/{status()?.https_port || 443}.
+                  {t("Map a hostname to a container's internal port. The Gateway serves it over HTTPS on ports")} {status()?.http_port || 80}/{status()?.https_port || 443}.
                 </p>
                 <div class="form-group">
                   <label class="form-label">
-                    Hostname <span style={{ color: "#f85149" }}>*</span>
+                    {t("Hostname")} <span style={{ color: "#f85149" }}>*</span>
                   </label>
                   <div style={{ display: "flex", "align-items": "center", gap: "4px" }}>
                     <input
@@ -1465,7 +1466,7 @@ export default function GatewayPage(props: GatewayPageProps) {
                 </div>
 
                 <div class="form-group">
-                  <label class="form-label">Path (optional)</label>
+                  <label class="form-label">{t("Path (optional)")}</label>
                   <input
                     class="form-input"
                     type="text"
@@ -1480,7 +1481,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
                 <div class="form-group">
                   <label class="form-label">
-                    Container <span style={{ color: "#f85149" }}>*</span>
+                    {t("Container")} <span style={{ color: "#f85149" }}>*</span>
                   </label>
                   <button
                     type="button"
@@ -1504,7 +1505,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
                 <div class="form-group">
                   <label class="form-label">
-                    Container Port <span style={{ color: "#f85149" }}>*</span>
+                    {t("Container Port")} <span style={{ color: "#f85149" }}>*</span>
                   </label>
                   <input
                     class="form-input"
@@ -1522,7 +1523,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
                 <Show when={previewUrl()}>
                   <div style={{ background: "#161b22", "border-radius": "6px", padding: "10px 14px", "margin-top": "12px", "font-size": "12px", "line-height": "1.6" }}>
-                    <span style={{ color: "#8b949e" }}>Routing: </span>
+                    <span style={{ color: "#8b949e" }}>{t("Routing:")}</span>
                     <span class="mono" style={{ color: "#58a6ff" }}>{previewUrl()}</span>
                     <Show when={addContainer() && addPort()}>
                       <span style={{ color: "#6e7681" }}>{" \u2192 "}</span>
@@ -1534,14 +1535,14 @@ export default function GatewayPage(props: GatewayPageProps) {
 
               <div class="modal-footer">
                 <button type="button" class="btn" onClick={() => setShowAdd(false)} disabled={adding()}>
-                  Cancel
+                  {t("Cancel")}
                 </button>
                 <button
                   type="submit"
                   class="btn btn-primary"
                   disabled={adding() || !addHostname().trim() || !addContainer()}
                 >
-                  {adding() ? "Adding..." : "Add Route"}
+                  {adding() ? t("Adding...") : t("Add Route")}
                 </button>
               </div>
             </form>
@@ -1554,14 +1555,14 @@ export default function GatewayPage(props: GatewayPageProps) {
         <div class="modal-overlay" onMouseDown={(e) => { mouseDownOnOverlay = (e.target as HTMLElement).classList.contains("modal-overlay"); }} onClick={(e) => { if (mouseDownOnOverlay && (e.target as HTMLElement).classList.contains("modal-overlay")) setShowContainerPicker(false); mouseDownOnOverlay = false; }}>
           <div class="modal-dialog" style={{ "max-width": "620px", "max-height": "70vh", display: "flex", "flex-direction": "column" }}>
             <div class="modal-header">
-              <h2 class="modal-title">Select Container</h2>
+              <h2 class="modal-title">{t("Select Container")}</h2>
               <button class="modal-close" onClick={() => setShowContainerPicker(false)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px 20px 8px" }}>
               <input
                 class="form-input"
                 type="text"
-                placeholder="Search containers..."
+                placeholder={t("Search containers...")}
                 value={pickerSearch()}
                 onInput={(e) => setPickerSearch(e.currentTarget.value)}
                 autofocus
@@ -1573,7 +1574,7 @@ export default function GatewayPage(props: GatewayPageProps) {
                 {(group) => (
                   <div style={{ "margin-top": "12px" }}>
                     <div style={{ "font-size": "11px", "font-weight": "600", color: "#8b949e", "text-transform": "uppercase", "letter-spacing": "0.5px", "margin-bottom": "6px", "padding-bottom": "4px", "border-bottom": "1px solid #21262d" }}>
-                      {group.name} <span style={{ "font-weight": "400", "text-transform": "none" }}>(stack)</span>
+                      {group.name} <span style={{ "font-weight": "400", "text-transform": "none" }}>{t("(stack)")}</span>
                     </div>
                     <div style={{ border: "1px solid #21262d", "border-radius": "6px", overflow: "hidden" }}>
                       <For each={group.containers}>
@@ -1610,7 +1611,7 @@ export default function GatewayPage(props: GatewayPageProps) {
               <Show when={pickerGrouped().standalone.length > 0}>
                 <div style={{ "margin-top": "12px" }}>
                   <div style={{ "font-size": "11px", "font-weight": "600", color: "#8b949e", "text-transform": "uppercase", "letter-spacing": "0.5px", "margin-bottom": "6px", "padding-bottom": "4px", "border-bottom": "1px solid #21262d" }}>
-                    Standalone
+                    {t("Standalone")}
                   </div>
                   <div style={{ border: "1px solid #21262d", "border-radius": "6px", overflow: "hidden" }}>
                     <For each={pickerGrouped().standalone}>
@@ -1645,12 +1646,12 @@ export default function GatewayPage(props: GatewayPageProps) {
 
               <Show when={pickerGrouped().stacks.length === 0 && pickerGrouped().standalone.length === 0}>
                 <div style={{ "text-align": "center", padding: "24px", color: "#6e7681", "font-size": "13px" }}>
-                  {pickerSearch() ? "No containers match your search" : "No containers found"}
+                  {pickerSearch() ? t("No containers match your search") : t("No containers found")}
                 </div>
               </Show>
             </div>
             <div class="modal-footer">
-              <button type="button" class="btn" onClick={() => setShowContainerPicker(false)}>Cancel</button>
+              <button type="button" class="btn" onClick={() => setShowContainerPicker(false)}>{t("Cancel")}</button>
             </div>
           </div>
         </div>
@@ -1663,36 +1664,36 @@ export default function GatewayPage(props: GatewayPageProps) {
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setEditRoute(null); }}>
           <div class="modal-content" style={{ "max-width": "480px" }}>
             <div class="modal-header">
-              <h2>Edit Route</h2>
+              <h2>{t("Edit Route")}</h2>
               <button class="modal-close" onClick={() => setEditRoute(null)}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
             <div class="modal-body" style={{ overflow: "visible" }}>
               <div class="form-group">
-                <label class="form-label">Hostname</label>
+                <label class="form-label">{t("Hostname")}</label>
                 <div style={{ display: "flex", "align-items": "center", gap: "4px" }}>
                   <input class="form-input" type="text" value={editHostname()} onInput={(e) => setEditHostname(e.currentTarget.value)} style={{ flex: "1" }} />
                 </div>
               </div>
               <div class="form-group">
-                <label class="form-label">Container</label>
+                <label class="form-label">{t("Container")}</label>
                 <input class="form-input" type="text" value={editContainer()} onInput={(e) => setEditContainer(e.currentTarget.value)} />
               </div>
               <div class="form-group">
-                <label class="form-label">Container Port</label>
+                <label class="form-label">{t("Container Port")}</label>
                 <input class="form-input" type="number" value={editPort()} onInput={(e) => setEditPort(e.currentTarget.value)} min="1" max="65535" />
               </div>
               <div class="form-group">
-                <label class="form-label">Path (optional)</label>
+                <label class="form-label">{t("Path (optional)")}</label>
                 <input class="form-input" type="text" value={editPath()} onInput={(e) => setEditPath(e.currentTarget.value)} placeholder="/api/*" />
-                <p style={{ "font-size": "11px", color: "#6e7681", "margin-top": "4px" }}>Route a specific path to this container</p>
+                <p style={{ "font-size": "11px", color: "#6e7681", "margin-top": "4px" }}>{t("Route a specific path to this container")}</p>
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setEditRoute(null)} disabled={editSaving()}>Cancel</button>
+              <button class="btn" onClick={() => setEditRoute(null)} disabled={editSaving()}>{t("Cancel")}</button>
               <button class="btn btn-primary" onClick={handleSaveEdit} disabled={editSaving() || !editHostname().trim() || !editContainer().trim() || isNaN(parseInt(editPort(), 10))}>
-                {editSaving() ? "Saving..." : "Save Changes"}
+                {editSaving() ? t("Saving...") : t("Save Changes")}
               </button>
             </div>
           </div>

@@ -1,4 +1,5 @@
 import { createSignal, For } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { copyToClipboard } from "../lib/clipboard";
 
@@ -107,7 +108,7 @@ export default function ExecTerminal(props: ExecTerminalProps) {
             class="btn btn-sm"
             onClick={copyLastOutput}
             disabled={history().length === 0}
-            title="Copy last command output"
+            title={t("Copy last command output")}
           >
             Copy Output
           </button>
@@ -141,7 +142,7 @@ export default function ExecTerminal(props: ExecTerminalProps) {
         <input
           class="exec-input"
           type="text"
-          placeholder={running() ? "Running..." : "Enter command..."}
+          placeholder={running() ? t("Running...") : t("Enter command...")}
           value={input()}
           onInput={(e) => setInput(e.currentTarget.value)}
           onKeyDown={handleKeyDown}

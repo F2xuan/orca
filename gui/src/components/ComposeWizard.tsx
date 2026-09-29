@@ -1,6 +1,7 @@
 import { createSignal, For, Show, onMount, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "./Toast";
+import { t } from "../lib/i18n";
 import Dropdown from "./Dropdown";
 import Spinner from "./Spinner";
 import YamlEditor from "./YamlEditor";
@@ -311,11 +312,11 @@ export default function ComposeWizard(props: ComposeWizardProps) {
       const filePath = `${dir}/docker-compose.yml`;
       const yamlContent = generatedYaml();
       await invoke("save_compose_file", { path: filePath, content: yamlContent });
-      showToast(`Stack "${name}" saved`, "success");
+      showToast(t("Stack \"{name}\" saved", { name }), "success");
       props.onClose();
       props.onDeployed?.();
     } catch (e) {
-      setError(`Failed to save: ${e}`);
+      setError(t("Failed to save: {error}", { error: String(e) }));
     }
     setSaving(false);
   };
@@ -330,11 +331,11 @@ export default function ComposeWizard(props: ComposeWizardProps) {
       const yamlContent = generatedYaml();
       await invoke("save_compose_file", { path: filePath, content: yamlContent });
       await invoke("compose_deploy_path", { path: dir });
-      showToast(`Stack "${name}" deployed!`, "success");
+      showToast(t("Stack \"{name}\" deployed!", { name }), "success");
       props.onClose();
       props.onDeployed?.();
     } catch (e) {
-      setError(`Deploy failed: ${e}`);
+      setError(t("Deploy failed: {error}", { error: String(e) }));
     }
     setDeploying(false);
   };
@@ -366,10 +367,10 @@ export default function ComposeWizard(props: ComposeWizardProps) {
   });
 
   const restartOptions = [
-    { value: "no", label: "No" },
-    { value: "always", label: "Always" },
-    { value: "unless-stopped", label: "Unless Stopped" },
-    { value: "on-failure", label: "On Failure" },
+    { value: "no", label: t("No") },
+    { value: "always", label: t("Always") },
+    { value: "unless-stopped", label: t("Unless Stopped") },
+    { value: "on-failure", label: t("On Failure") },
   ];
 
   return (
@@ -379,9 +380,9 @@ export default function ComposeWizard(props: ComposeWizardProps) {
       <div class="modal-dialog" style={{ "max-width": "900px", height: "85vh", display: "flex", "flex-direction": "column" }}>
         <div class="modal-header">
           <h2 class="modal-title">
-            {step() === 1 && "Create Compose Stack — Name"}
-            {step() === 2 && "Create Compose Stack — Services"}
-            {step() === 3 && "Create Compose Stack — Review & Deploy"}
+            {step() === 1 && t("Create Compose Stack — Name")}
+            {step() === 2 && t("Create Compose Stack — Services")}
+            {step() === 3 && t("Create Compose Stack — Review & Deploy")}
           </h2>
           <button class="modal-close" onClick={() => { if (!deploying() && !saving()) props.onClose(); }}>{"\u00d7"}</button>
         </div>
@@ -406,17 +407,17 @@ export default function ComposeWizard(props: ComposeWizardProps) {
           <Show when={step() === 1}>
             <div style={{ "max-width": "500px", margin: "40px auto", width: "100%" }}>
               <div class="form-group">
-                <label class="form-label">Stack Name</label>
+                <label class="form-label">{t("Stack Name")}</label>
                 <input
                   class="form-input"
                   type="text"
-                  placeholder="e.g., my-web-app"
+                  placeholder={t("e.g., my-web-app")}
                   value={stackName()}
                   onInput={(e) => setStackName(e.currentTarget.value.replace(/[^a-zA-Z0-9_-]/g, ""))}
                   autofocus
                 />
                 <span class="form-hint">
-                  This will be the directory name under ~/.config/orca/stacks/. Only letters, numbers, hyphens, and underscores.
+                  {t("This will be the directory name under the stacks folder. Only letters, numbers, hyphens, and underscores.")}
                 </span>
               </div>
             </div>
@@ -459,7 +460,7 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                             "font-weight": "600",
                             "font-size": "14px",
                           }}>
-                            {svc.name || "(unnamed service)"}
+                            {svc.name || t("(unnamed service)")}
                           </span>
                           <Show when={svc.image}>
                             <span style={{ color: "#8b949e", "font-size": "12px" }}>{svc.image}</span>
@@ -476,14 +477,14 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                             onClick={(e) => { e.stopPropagation(); setEditingServiceId(isEditing() ? null : svc.id); }}
                             style={{ "font-size": "11px" }}
                           >
-                            {isEditing() ? "Collapse" : "Edit"}
+                            {isEditing() ? t("Collapse") : t("Edit")}
                           </button>
                           <button
                             class="btn btn-sm"
                             onClick={(e) => { e.stopPropagation(); removeService(svc.id); }}
                             style={{ color: "#f85149", "font-size": "11px" }}
                           >
-                            Remove
+                            {t("Remove")}
                           </button>
                         </div>
                       </div>
@@ -494,21 +495,21 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                           {/* Name & Image row */}
                           <div style={{ display: "grid", "grid-template-columns": "1fr 1fr", gap: "12px" }}>
                             <div class="form-group">
-                              <label class="form-label">Service Name</label>
+                              <label class="form-label">{t("Service Name")}</label>
                               <input
                                 class="form-input"
                                 type="text"
-                                placeholder="e.g., web, db, redis"
+                                placeholder={t("e.g., web, db, redis")}
                                 value={svc.name}
                                 onInput={(e) => updateService(svc.id, "name", e.currentTarget.value.replace(/[^a-zA-Z0-9_-]/g, ""))}
                               />
                             </div>
                             <div class="form-group" style={{ position: "relative" }}>
-                              <label class="form-label">Image</label>
+                              <label class="form-label">{t("Image")}</label>
                               <input
                                 class="form-input"
                                 type="text"
-                                placeholder="e.g., nginx:alpine"
+                                placeholder={t("e.g., nginx:alpine")}
                                 value={svc.image}
                                 onInput={(e) => handleImageInput(svc.id, e.currentTarget.value)}
                                 onClick={(e) => e.stopPropagation()}
@@ -559,8 +560,8 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                           {/* Ports */}
                           <div class="form-group">
                             <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
-                              <label class="form-label" style={{ margin: "0" }}>Ports</label>
-                              <button class="btn btn-sm" onClick={() => addPort(svc.id)} style={{ "font-size": "11px" }}>+ Add Port</button>
+                              <label class="form-label" style={{ margin: "0" }}>{t("Ports")}</label>
+                              <button class="btn btn-sm" onClick={() => addPort(svc.id)} style={{ "font-size": "11px" }}>{t("+ Add Port")}</button>
                             </div>
                             <For each={svc.ports}>
                               {(port, i) => (
@@ -568,7 +569,7 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                                   <input
                                     class="form-input"
                                     type="text"
-                                    placeholder="Host port"
+                                    placeholder={t("Host port")}
                                     value={port.host}
                                     onInput={(e) => updatePort(svc.id, i(), "host", e.currentTarget.value)}
                                     style={{ width: "120px" }}
@@ -577,7 +578,7 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                                   <input
                                     class="form-input"
                                     type="text"
-                                    placeholder="Container port"
+                                    placeholder={t("Container port")}
                                     value={port.container}
                                     onInput={(e) => updatePort(svc.id, i(), "container", e.currentTarget.value)}
                                     style={{ width: "120px" }}
@@ -597,8 +598,8 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                           {/* Environment Variables */}
                           <div class="form-group">
                             <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
-                              <label class="form-label" style={{ margin: "0" }}>Environment Variables</label>
-                              <button class="btn btn-sm" onClick={() => addEnv(svc.id)} style={{ "font-size": "11px" }}>+ Add Variable</button>
+                              <label class="form-label" style={{ margin: "0" }}>{t("Environment Variables")}</label>
+                              <button class="btn btn-sm" onClick={() => addEnv(svc.id)} style={{ "font-size": "11px" }}>{t("+ Add Variable")}</button>
                             </div>
                             <For each={svc.env}>
                               {(envVar, i) => (
@@ -635,8 +636,8 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                           {/* Volumes */}
                           <div class="form-group">
                             <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
-                              <label class="form-label" style={{ margin: "0" }}>Volumes</label>
-                              <button class="btn btn-sm" onClick={() => addVolume(svc.id)} style={{ "font-size": "11px" }}>+ Add Volume</button>
+                              <label class="form-label" style={{ margin: "0" }}>{t("Volumes")}</label>
+                              <button class="btn btn-sm" onClick={() => addVolume(svc.id)} style={{ "font-size": "11px" }}>{t("+ Add Volume")}</button>
                             </div>
                             <For each={svc.volumes}>
                               {(vol, i) => (
@@ -644,7 +645,7 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                                   <input
                                     class="form-input"
                                     type="text"
-                                    placeholder="Source (name or /path)"
+                                    placeholder={t("Source (name or /path)")}
                                     value={vol.source}
                                     onInput={(e) => updateVolume(svc.id, i(), "source", e.currentTarget.value)}
                                     style={{ flex: "1" }}
@@ -653,7 +654,7 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                                   <input
                                     class="form-input"
                                     type="text"
-                                    placeholder="Target (/path/in/container)"
+                                    placeholder={t("Target (/path/in/container)")}
                                     value={vol.target}
                                     onInput={(e) => updateVolume(svc.id, i(), "target", e.currentTarget.value)}
                                     style={{ flex: "1" }}
@@ -673,7 +674,7 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                           {/* Depends On */}
                           <Show when={otherServiceNames().length > 0}>
                             <div class="form-group">
-                              <label class="form-label">Depends On</label>
+                              <label class="form-label">{t("Depends On")}</label>
                               <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
                                 <For each={otherServiceNames()}>
                                   {(depName) => {
@@ -695,7 +696,7 @@ export default function ComposeWizard(props: ComposeWizardProps) {
 
                           {/* Restart Policy */}
                           <div class="form-group">
-                            <label class="form-label">Restart Policy</label>
+                            <label class="form-label">{t("Restart Policy")}</label>
                             <Dropdown
                               value={svc.restart}
                               options={restartOptions}
@@ -711,7 +712,7 @@ export default function ComposeWizard(props: ComposeWizardProps) {
               </For>
 
               <button class="btn" onClick={addService} style={{ "align-self": "flex-start" }}>
-                + Add Service
+                {t("+ Add Service")}
               </button>
             </div>
           </Show>
@@ -753,12 +754,12 @@ export default function ComposeWizard(props: ComposeWizardProps) {
         <div class="modal-footer">
           <Show when={step() > 1}>
             <button class="btn" onClick={() => setStep((s) => (s - 1) as 1 | 2 | 3)} disabled={deploying() || saving()}>
-              Back
+              {t("Back")}
             </button>
           </Show>
           <div style={{ flex: "1" }} />
           <button class="btn" onClick={() => { if (!deploying() && !saving()) props.onClose(); }} disabled={deploying() || saving()}>
-            Cancel
+            {t("Cancel")}
           </button>
           <Show when={step() < 3}>
             <button
@@ -779,15 +780,15 @@ export default function ComposeWizard(props: ComposeWizardProps) {
                 }
               }}
             >
-              Next
+              {t("Next")}
             </button>
           </Show>
           <Show when={step() === 3}>
             <button class="btn" onClick={handleSaveOnly} disabled={deploying() || saving()}>
-              {saving() ? <><Spinner size={12} />{" Saving..."}</> : "Save Only"}
+              {saving() ? <><Spinner size={12} />{" "}{t("Saving...")}</> : t("Save Only")}
             </button>
             <button class="btn btn-primary" onClick={handleDeploy} disabled={deploying() || saving()}>
-              {deploying() ? <><Spinner size={12} />{" Deploying..."}</> : "Deploy"}
+              {deploying() ? <><Spinner size={12} />{" "}{t("Deploying...")}</> : t("Deploy")}
             </button>
           </Show>
         </div>

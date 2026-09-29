@@ -1,6 +1,7 @@
 import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "./Toast";
+import { t } from "../lib/i18n";
 import { getAlertEvents, getUnreadCount, markAllRead, clearEvents } from "../lib/activityStore";
 import { openAiWindow } from "./AiAssistant";
 import type { SystemHealth, RemoteHost, ActiveHost } from "../lib/types";
@@ -14,13 +15,13 @@ function relativeTime(date: Date): string {
   const now = Date.now();
   const diff = now - date.getTime();
   const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return "just now";
+  if (seconds < 60) return t("just now");
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return t("{minutes}m ago", { minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return t("{hours}h ago", { hours });
   const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return t("{days}d ago", { days });
 }
 
 export default function Titlebar(props: TitlebarProps) {
@@ -48,12 +49,12 @@ export default function Titlebar(props: TitlebarProps) {
       const active = (await invoke("get_active_host")) as ActiveHost;
       setActiveHost(active);
       setHostMenuOpen(false);
-      showToast(`Switched to ${active.name}`, "success");
+      showToast(t("Switched to {name}", { name: active.name }), "success");
       // Trigger a full refresh + chart reset across the app
       document.dispatchEvent(new CustomEvent("orca-host-switch"));
       document.dispatchEvent(new CustomEvent("orca-refresh"));
     } catch (e) {
-      showToast(`Failed to switch host: ${e}`, "error");
+      showToast(t("Failed to switch host: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -67,7 +68,7 @@ export default function Titlebar(props: TitlebarProps) {
 
       // Detect reconnection
       if (prevConnected === false && health.docker_connected) {
-        showToast("Docker connection restored", "success");
+        showToast(t("Docker connection restored"), "success");
       }
     } catch {
       // Daemon not reachable — docker status unknown
@@ -157,10 +158,10 @@ export default function Titlebar(props: TitlebarProps) {
 
   const statusText = () => {
     if (props.daemonStatus === "running") {
-      if (dockerConnected() === false) return "disconnected";
-      return "running";
+      if (dockerConnected() === false) return t("disconnected");
+      return t("running");
     }
-    return props.daemonStatus;
+    return t(props.daemonStatus);
   };
 
   return (
@@ -168,17 +169,17 @@ export default function Titlebar(props: TitlebarProps) {
       <div class="titlebar-left" data-tauri-drag-region>
         <img src="/icon.png" class="titlebar-icon" alt="" />
         <span class="titlebar-title" data-tauri-drag-region>Orca Desktop</span>
-        <div class="titlebar-status" onClick={() => props.onNavigate?.("environment")} title="System Health">
+        <div class="titlebar-status" onClick={() => props.onNavigate?.("environment")} title={t("System Health")}>
           <span class="titlebar-status-dot" style={{ background: statusColor() }} />
           <span class="titlebar-status-text">{statusText()}</span>
           <Show when={runtimeInfo() && dockerConnected()}>
             <span class="titlebar-runtime">{runtimeInfo()}</span>
           </Show>
           <Show when={dockerConnected() === false && props.daemonStatus === "running"}>
-            <span class="titlebar-reconnecting" title="Click to check System Health">No runtime</span>
+            <span class="titlebar-reconnecting" title={t("Click to check System Health")}>{t("No runtime")}</span>
           </Show>
           <Show when={warningCount() > 0}>
-            <span class="titlebar-warning-badge" title={`${warningCount()} warning${warningCount() > 1 ? "s" : ""}`}>
+            <span class="titlebar-warning-badge" title={t("{count} warnings", { count: warningCount() })}>
               {warningCount()}
             </span>
           </Show>
@@ -187,7 +188,7 @@ export default function Titlebar(props: TitlebarProps) {
             <button
               class={`host-selector-btn ${activeHost().is_remote ? "host-remote" : ""}`}
               onClick={() => { setHostMenuOpen(!hostMenuOpen()); loadHosts(); }}
-              title={activeHost().is_remote ? `Connected to ${activeHost().url}` : "Local daemon"}
+              title={activeHost().is_remote ? t("Connected to {url}", { url: activeHost().url }) : t("Local daemon")}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
@@ -202,7 +203,7 @@ export default function Titlebar(props: TitlebarProps) {
                   onClick={() => switchToHost(null)}
                 >
                   <span class="host-dot" style={{ background: "#3fb950" }} />
-                  <span>Local</span>
+                  <span>{t("Local")}</span>
                 </div>
                 <For each={remoteHosts()}>
                   {(host) => (
@@ -221,7 +222,7 @@ export default function Titlebar(props: TitlebarProps) {
                   onClick={() => { setHostMenuOpen(false); props.onNavigate?.("settings:remote-hosts"); }}
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                  <span>Manage Hosts...</span>
+                  <span>{t("Manage Hosts...")}</span>
                 </div>
               </div>
             </Show>
@@ -239,13 +240,13 @@ export default function Titlebar(props: TitlebarProps) {
         data-tauri-drag-region-exclude
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={{ opacity: 0.5 }}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <span>Search...</span>
+        <span>{t("Search...")}</span>
         <span class="titlebar-search-shortcut">⌘K</span>
       </button>
       <div class="titlebar-controls">
         <button
           class="notification-btn"
-          title="AI Assistant"
+          title={t("AI Assistant")}
           onClick={openAiWindow}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -259,7 +260,7 @@ export default function Titlebar(props: TitlebarProps) {
         <div class="notification-bell">
           <button
             class="notification-btn"
-            title="Notifications"
+            title={t("Notifications")}
             onClick={() => {
               const opening = !bellOpen();
               setBellOpen(opening);
@@ -276,9 +277,9 @@ export default function Titlebar(props: TitlebarProps) {
           <Show when={bellOpen()}>
             <div class="notification-dropdown">
               <div class="notification-dropdown-header">
-                <span>Notifications</span>
+                <span>{t("Notifications")}</span>
                 <span style={{ color: "#8b949e", "font-weight": "400" }}>
-                  {getAlertEvents().length} alert{getAlertEvents().length !== 1 ? "s" : ""}
+                  {t("{count} alerts", { count: getAlertEvents().length })}
                 </span>
               </div>
               <div class="notification-dropdown-body">
@@ -286,7 +287,7 @@ export default function Titlebar(props: TitlebarProps) {
                   when={getAlertEvents().length > 0}
                   fallback={
                     <div style={{ padding: "20px", "text-align": "center", color: "#8b949e", "font-size": "12px" }}>
-                      No errors or warnings
+                      {t("No errors or warnings")}
                     </div>
                   }
                 >
@@ -295,7 +296,7 @@ export default function Titlebar(props: TitlebarProps) {
                       <div
                         class="activity-event activity-event-clickable"
                         onClick={() => { setBellOpen(false); props.onNavigate?.("activity"); }}
-                        title="Click to view in Activity"
+                        title={t("Click to view in Activity")}
                       >
                         <div class={`activity-event-icon activity-icon-${event.severity}`}>
                           {event.severity === "error" ? "\u2717" : "\u26A0"}
@@ -320,7 +321,7 @@ export default function Titlebar(props: TitlebarProps) {
                     if (props.onNavigate) props.onNavigate("activity");
                   }}
                 >
-                  View All Activity
+                  {t("View All Activity")}
                 </button>
                 <Show when={getAlertEvents().length > 0}>
                   <button
@@ -330,24 +331,24 @@ export default function Titlebar(props: TitlebarProps) {
                       setBellOpen(false);
                     }}
                   >
-                    Clear
+                    {t("Clear")}
                   </button>
                 </Show>
               </div>
             </div>
           </Show>
         </div>
-        <button class="titlebar-btn" onClick={minimize} title="Minimize">
+        <button class="titlebar-btn" onClick={minimize} title={t("Minimize")}>
           <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
         </button>
-        <button class="titlebar-btn" onClick={toggleMaximize} title={maximized() ? "Restore" : "Maximize"}>
+        <button class="titlebar-btn" onClick={toggleMaximize} title={maximized() ? t("Restore") : t("Maximize")}>
           <Show when={maximized()} fallback={
             <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>
           }>
             <svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 0h8v8h-2v2H0V2h2V0zm1 1v1h5v5h1V1H3zM1 3v6h6V3H1z" fill="currentColor"/></svg>
           </Show>
         </button>
-        <button class="titlebar-btn titlebar-btn-close" onClick={close} title="Close">
+        <button class="titlebar-btn titlebar-btn-close" onClick={close} title={t("Close")}>
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 0l4 4L9 0l1 1-4 4 4 4-1 1-4-4-4 4L0 9l4-4L0 1z" fill="currentColor"/></svg>
         </button>
       </div>

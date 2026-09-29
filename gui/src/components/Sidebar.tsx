@@ -1,5 +1,6 @@
 import { createSignal, onMount, onCleanup, For, Show, JSX } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../lib/i18n";
 import type { Page } from "../App";
 import type { RemoteHost } from "../lib/types";
 
@@ -198,10 +199,10 @@ export default function Sidebar(props: SidebarProps) {
           <button
             class={`nav-item ${props.currentPage === "fleet" ? "active" : ""}`}
             onClick={() => props.onNavigate("fleet" as Page)}
-            title={collapsed() ? "Fleet" : undefined}
+            title={collapsed() ? t("Fleet") : undefined}
           >
             <span class="nav-icon">{icons.fleet()}</span>
-            <span class="nav-label">Fleet</span>
+            <span class="nav-label">{t("Fleet")}</span>
           </button>
           <div class="nav-separator" />
         </Show>
@@ -210,10 +211,10 @@ export default function Sidebar(props: SidebarProps) {
             <button
               class={`nav-item ${props.currentPage === item.id ? "active" : ""}`}
               onClick={() => props.onNavigate(item.id)}
-              title={collapsed() ? item.label : undefined}
+              title={collapsed() ? t(item.label) : undefined}
             >
               <span class="nav-icon">{icons[item.id]?.()}</span>
-              <span class="nav-label">{item.label}</span>
+              <span class="nav-label">{t(item.label)}</span>
               <Show when={!collapsed() && badgeFor(item.id)}>
                 {(count) => <span class="nav-badge">{count()}</span>}
               </Show>
@@ -226,14 +227,14 @@ export default function Sidebar(props: SidebarProps) {
         <button
           class={`nav-item ${props.currentPage === "settings" ? "active" : ""}`}
           onClick={() => props.onNavigate("settings")}
-          title={collapsed() ? "Settings" : undefined}
+          title={collapsed() ? t("Settings") : undefined}
         >
           <span class="nav-icon">{icons.settings()}</span>
-          <span class="nav-label">Settings</span>
+          <span class="nav-label">{t("Settings")}</span>
         </button>
       </nav>
 
-      <button class="sidebar-toggle" onClick={toggleCollapsed} title={collapsed() ? "Expand sidebar" : "Collapse sidebar"}>
+      <button class="sidebar-toggle" onClick={toggleCollapsed} title={collapsed() ? t("Expand sidebar") : t("Collapse sidebar")}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
           style={{ transform: collapsed() ? "rotate(180deg)" : "none", transition: "transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)" }}
         >

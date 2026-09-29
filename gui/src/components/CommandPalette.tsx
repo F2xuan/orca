@@ -1,6 +1,7 @@
 import { createSignal, onMount, onCleanup, For, Show, createMemo } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "./Toast";
+import { t, setLocale, getLocale, type Locale } from "../lib/i18n";
 import { confirmDanger } from "./ConfirmDialog";
 
 interface Command {
@@ -38,29 +39,41 @@ export default function CommandPalette(props: CommandPaletteProps) {
     { id: "nav-gateway", name: "Go to Gateway", icon: "\u21C4", category: "Navigation", action: () => { props.onNavigate("gateway"); props.onClose(); } },
     { id: "nav-builds", name: "Go to Builds", icon: "\u2692", category: "Navigation", action: () => { props.onNavigate("builds"); props.onClose(); } },
 
+    // Language
+    { id: "lang-en", name: "Language: English", icon: "\u24D8", category: "Language", action: () => {
+      setLocale("en" as Locale);
+      props.onClose();
+      showToast(t("Language changed"), "success");
+    }},
+    { id: "lang-zh", name: "Language: Chinese (中文)", icon: "\u24D8", category: "Language", action: () => {
+      setLocale("zh-CN" as Locale);
+      props.onClose();
+      showToast(t("Language changed"), "success");
+    }},
+
     // Gateway
     { id: "gw-start", name: "Gateway: Start", icon: "\u25B6", category: "Gateway", action: async () => {
       props.onClose();
       try {
         await invoke("gateway_start");
-        showToast("Gateway started", "success");
+        showToast(t("Gateway started"), "success");
       } catch (e) {
-        showToast(`Failed to start gateway: ${e}`, "error");
+        showToast(t("Failed to start gateway: {error}", { error: String(e) }), "error");
       }
     }},
     { id: "gw-stop", name: "Gateway: Stop", icon: "\u25A0", category: "Gateway", action: async () => {
       props.onClose();
       const ok = await confirmDanger({
-        title: "Stop gateway?",
-        message: "All routed traffic will be interrupted until the gateway is started again.",
-        confirmLabel: "Stop gateway",
+        title: t("Stop gateway?"),
+        message: t("All routed traffic will be interrupted until the gateway is started again."),
+        confirmLabel: t("Stop gateway"),
       });
       if (!ok) return;
       try {
         await invoke("gateway_stop");
-        showToast("Gateway stopped", "success");
+        showToast(t("Gateway stopped"), "success");
       } catch (e) {
-        showToast(`Failed to stop gateway: ${e}`, "error");
+        showToast(t("Failed to stop gateway: {error}", { error: String(e) }), "error");
       }
     }},
     { id: "gw-add-route", name: "Gateway: Add Route", icon: "\u2795", category: "Gateway", action: () => { props.onNavigate("gateway"); props.onClose(); } },
@@ -74,18 +87,18 @@ export default function CommandPalette(props: CommandPaletteProps) {
         const containers = await invoke("list_containers") as Array<{ id: string; state: string; name: string }>;
         running = containers.filter((c) => c.state === "Running");
       } catch (e) {
-        showToast(`Failed to list containers: ${e}`, "error");
+        showToast(t("Failed to list containers: {error}", { error: String(e) }), "error");
         return;
       }
       if (running.length === 0) {
-        showToast("No running containers", "info");
+        showToast(t("No running containers"), "info");
         return;
       }
       const ok = await confirmDanger({
-        title: `Stop ${running.length} running container${running.length !== 1 ? "s" : ""}?`,
+        title: t("Stop {count} running containers?", { count: running.length }),
         message:
-          "This will signal every running container on the active host to stop. Work in progress may be lost.",
-        confirmLabel: "Stop all",
+          t("This will signal every running container on the active host to stop. Work in progress may be lost."),
+        confirmLabel: t("Stop all"),
       });
       if (!ok) return;
       let stopped = 0;
@@ -97,7 +110,7 @@ export default function CommandPalette(props: CommandPaletteProps) {
           // continue stopping others
         }
       }
-      showToast(`Stopped ${stopped} container${stopped !== 1 ? "s" : ""}`, "success");
+      showToast(t("Stopped {count} containers", { count: stopped }), "success");
     }},
 
     // Images
@@ -135,7 +148,7 @@ export default function CommandPalette(props: CommandPaletteProps) {
   const filtered = () => {
     const q = query().trim();
     if (!q) return commands;
-    return commands.filter((cmd) => fuzzyMatch(cmd.name, q) || fuzzyMatch(cmd.category, q));
+    return commands.filter((cmd) => fuzzyMatch(cmd.name, q) || fuzzyMatch(cmd.category, q) || fuzzyMatch(t(cmd.name), q) || fuzzyMatch(t(cmd.category), q));
   };
 
   // Group filtered commands by category, preserving order
@@ -191,7 +204,7 @@ export default function CommandPalette(props: CommandPaletteProps) {
           ref={inputRef}
           class="command-palette-input"
           type="text"
-          placeholder="Type a command..."
+          placeholder={t("Type a command...")}
           value={query()}
           onInput={(e) => {
             setQuery(e.currentTarget.value);
@@ -206,7 +219,7 @@ export default function CommandPalette(props: CommandPaletteProps) {
           <For each={groupedCommands()}>
             {(group) => (
               <>
-                <div class="command-group-header">{group.category}</div>
+                <div class="command-group-header">{t(group.category)}</div>
                 <For each={group.commands}>
                   {(cmd) => {
                     const myIndex = globalIndex++;
@@ -217,8 +230,8 @@ export default function CommandPalette(props: CommandPaletteProps) {
                         onMouseEnter={() => setSelectedIndex(myIndex)}
                       >
                         <span class="command-item-icon">{cmd.icon}</span>
-                        <span class="command-item-name">{cmd.name}</span>
-                        <span class="command-item-category">{cmd.category}</span>
+                        <span class="command-item-name">{t(cmd.name)}</span>
+                        <span class="command-item-category">{t(cmd.category)}</span>
                         <Show when={cmd.shortcut}>
                           <span class="command-item-shortcut">{cmd.shortcut}</span>
                         </Show>
@@ -231,7 +244,7 @@ export default function CommandPalette(props: CommandPaletteProps) {
           </For>
           <Show when={filtered().length === 0}>
             <div style={{ padding: "16px", "text-align": "center", color: "#484f58", "font-size": "13px" }}>
-              No matching commands
+              {t("No matching commands")}
             </div>
           </Show>
         </div>

@@ -2,6 +2,7 @@ import { createSignal, createEffect, onMount, onCleanup, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { onOrcaEvent } from "./lib/events";
+import { t } from "./lib/i18n";
 import { addEvent } from "./lib/activityStore";
 import { lazy } from "solid-js";
 const AiWindow = lazy(() => import("./components/AiWindow"));
@@ -54,7 +55,7 @@ export default function App() {
   const [showShortcuts, setShowShortcuts] = createSignal(false);
   const [showComposeWizard, setShowComposeWizard] = createSignal(false);
   const [environmentChecked, setEnvironmentChecked] = createSignal(false);
-  const [startupStep, setStartupStep] = createSignal("Starting Orca...");
+  const [startupStep, setStartupStep] = createSignal(t("Starting Orca..."));
   let aiApi: AiAssistantApi | undefined;
 
   // Fleet health polling state
@@ -81,9 +82,9 @@ export default function App() {
           fleetStatusCount[key] = (fleetStatusCount[key] || 0) + 1;
           if (fleetStatusCount[key] >= 2) {
             if (host.online) {
-              showToast(`${host.name} is back online`, "success");
+              showToast(t("{name} is back online", { name: host.name }), "success");
             } else {
-              showToast(`${host.name} is offline`, "error");
+              showToast(t("{name} is offline", { name: host.name }), "error");
             }
             fleetStatusCount[key] = 0;
             lastFleetStatus[key] = host.online;
@@ -144,12 +145,12 @@ export default function App() {
 
   const checkEnvironment = async () => {
     if (environmentChecked()) return;
-    setStartupStep("Checking environment...");
+    setStartupStep(t("Checking environment..."));
 
     // Timeout: if env check takes >15s, show the environment page anyway
     const timeout = setTimeout(() => {
       if (!environmentChecked()) {
-        setStartupStep("Taking longer than expected...");
+        setStartupStep(t("Taking longer than expected..."));
         setTimeout(() => {
           if (!environmentChecked()) {
             setEnvironmentChecked(true);
@@ -167,7 +168,7 @@ export default function App() {
         setPage("environment");
       } else {
         // Environment says ready, but check if daemon can actually reach Docker
-        setStartupStep("Verifying Docker connection...");
+        setStartupStep(t("Verifying Docker connection..."));
         try {
           const health = (await invoke("system_health")) as any;
           if (!health?.docker_connected) {
@@ -368,14 +369,14 @@ export default function App() {
 
       if (eventType === "container.died" || eventType === "die" || eventType === "ContainerDied") {
         const title = oomKilled
-          ? `Container '${containerLabel}' ran out of memory`
-          : `Container '${containerLabel}' exited`;
+          ? t("Container '{name}' ran out of memory", { name: containerLabel })
+          : t("Container '{name}' exited", { name: containerLabel });
         const detail = oomKilled
-          ? "Docker reported OOMKilled. Check the container memory limit or, on macOS, increase the Docker VM memory in Settings."
-          : Number.isFinite(exitCode) ? `Exit code: ${exitCode}` : undefined;
+          ? t("Docker reported OOMKilled. Check the container memory limit or, on macOS, increase the Docker VM memory in Settings.")
+          : Number.isFinite(exitCode) ? t("Exit code: {code}", { code: exitCode }) : undefined;
         addEvent({ type: "container.died", title, detail, severity: "error" });
-        showToast(oomKilled ? `${title}. Check memory settings.` : title, "error", {
-          label: oomKilled && id ? "View Container" : "View Logs",
+        showToast(oomKilled ? `${title}. ${t("Check memory settings.")}` : title, "error", {
+          label: oomKilled && id ? t("View Container") : t("View Logs"),
           onClick: () => {
             if (oomKilled && id) {
               setDetailId(id);
@@ -386,34 +387,34 @@ export default function App() {
           },
         });
       } else if (eventType === "container.started" || eventType === "start" || eventType === "ContainerStarted") {
-        addEvent({ type: "container.started", title: `Container '${containerLabel}' started`, severity: "success" });
+        addEvent({ type: "container.started", title: t("Container '{name}' started", { name: containerLabel }), severity: "success" });
       } else if (eventType === "image.pulled" || eventType === "pull" || eventType === "ImagePulled") {
-        addEvent({ type: "image.pulled", title: `Image pulled: ${reference}`, severity: "success" });
-        showToast(`Image pulled: ${reference}`, "success");
+        addEvent({ type: "image.pulled", title: t("Image pulled: {reference}", { reference }), severity: "success" });
+        showToast(t("Image pulled: {reference}", { reference }), "success");
       }
     });
 
     // Auto-start daemon with progress feedback
     const startAndWait = async () => {
-      setStartupStep("Starting daemon...");
+      setStartupStep(t("Starting daemon..."));
       try {
         await invoke("start_daemon");
       } catch {}
 
       // Poll for readiness
-      setStartupStep("Waiting for daemon...");
+      setStartupStep(t("Waiting for daemon..."));
       for (let i = 0; i < 10; i++) {
         try {
           const status = (await invoke("get_status")) as any;
           if (status.daemon_running) {
-            setStartupStep("Connecting to Docker...");
+            setStartupStep(t("Connecting to Docker..."));
             // On Windows, Docker in WSL might need a reconnect
             try { await invoke("reconnect_runtime"); } catch {}
             setDaemonStatus("running");
             return;
           }
         } catch {}
-        if (i >= 3) setStartupStep("Starting daemon... (this may take a moment)");
+        if (i >= 3) setStartupStep(t("Starting daemon... (this may take a moment)"));
         await new Promise(r => setTimeout(r, 500));
       }
       setDaemonStatus("stopped");

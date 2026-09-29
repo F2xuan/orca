@@ -1,4 +1,5 @@
 import { For, onMount, onCleanup } from "solid-js";
+import { t } from "../lib/i18n";
 
 interface ShortcutGroup {
   title: string;
@@ -94,7 +95,7 @@ export default function KeyboardShortcuts(props: KeyboardShortcutsProps) {
           "margin-bottom": "20px",
         }}>
           <h2 style={{ margin: "0", "font-size": "16px", "font-weight": "600", color: "#e6edf3" }}>
-            Keyboard Shortcuts
+            {t("Keyboard Shortcuts")}
           </h2>
           <button
             onClick={() => props.onClose()}
@@ -123,7 +124,7 @@ export default function KeyboardShortcuts(props: KeyboardShortcutsProps) {
                 "letter-spacing": "0.5px",
                 "margin-bottom": "8px",
               }}>
-                {group.title}
+                {t(group.title)}
               </div>
               <For each={group.shortcuts}>
                 {(shortcut) => (
@@ -134,7 +135,7 @@ export default function KeyboardShortcuts(props: KeyboardShortcutsProps) {
                     padding: "6px 0",
                   }}>
                     <span style={{ "font-size": "13px", color: "#c9d1d9" }}>
-                      {shortcut.description}
+                      {t(shortcut.description)}
                     </span>
                     <div style={{ display: "flex", gap: "4px" }}>
                       <For each={shortcut.keys}>

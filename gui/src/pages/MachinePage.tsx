@@ -1,4 +1,5 @@
 import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import type { MachineInfo, SystemHealth } from "../lib/types";
 import { formatBytes } from "../lib/format";
@@ -73,19 +74,19 @@ export default function MachinePage() {
 
   const pruneAll = async () => {
     const ok = await confirmDanger({
-      title: "Prune Docker System",
+      title: t("Prune Docker System"),
       message: "Remove all unused containers, images, volumes, and build cache? This cannot be undone.",
-      confirmLabel: "Prune",
+      confirmLabel: t("Prune"),
     });
     if (!ok) return;
     setPruning(true);
     try {
       await invoke("prune_images");
-      showToast("Docker system pruned successfully", "success");
+      showToast(t("Docker system pruned successfully"), "success");
       await refreshHealth();
     } catch (e) {
       logError(`Failed to prune Docker system: ${e}`);
-      showToast(`Prune failed: ${e}`, "error");
+      showToast(t("Prune failed: {error}", { error: String(e) }), "error");
     } finally {
       setPruning(false);
     }
@@ -100,8 +101,8 @@ export default function MachinePage() {
   return (
     <div>
       <div class="page-header">
-        <h1 class="page-title">Machine</h1>
-        <button class="btn" onClick={refresh}>Refresh</button>
+        <h1 class="page-title">{t("Machine")}</h1>
+        <button class="btn" onClick={refresh}>{t("Refresh")}</button>
       </div>
 
       <Show when={error()}>
@@ -124,30 +125,30 @@ export default function MachinePage() {
         }>
           {(m) => (
             <div class="card">
-              <h3 style={{ "margin-bottom": "12px", "font-size": "14px", color: "#e6edf3" }}>Machine Info</h3>
+              <h3 style={{ "margin-bottom": "12px", "font-size": "14px", color: "#e6edf3" }}>{t("Machine Info")}</h3>
               <div class="card-grid">
-                <span class="card-label">Name</span>
+                <span class="card-label">{t("Name")}</span>
                 <span class="card-value">{m().name}</span>
 
-                <span class="card-label">Backend</span>
+                <span class="card-label">{t("Backend")}</span>
                 <span class="card-value">{m().backend}</span>
 
-                <span class="card-label">State</span>
+                <span class="card-label">{t("State")}</span>
                 <span class={`state-badge ${m().state === "Running" ? "state-running" : "state-stopped"}`}>
-                  {m().state}
+                  {t(m().state)}
                 </span>
 
-                <span class="card-label">Runtime</span>
+                <span class="card-label">{t("Runtime")}</span>
                 <span class="card-value">{m().config.runtime}</span>
 
-                <span class="card-label">CPUs</span>
+                <span class="card-label">{t("CPUs")}</span>
                 <span class="card-value">{m().config.cpus}</span>
 
-                <span class="card-label">Memory</span>
+                <span class="card-label">{t("Memory")}</span>
                 <span class="card-value">{formatBytes(m().config.memory_mb * 1024 * 1024)}</span>
 
                 <Show when={m().config.disk_gb > 0}>
-                  <span class="card-label">Disk</span>
+                  <span class="card-label">{t("Disk")}</span>
                   <span class="card-value">{m().config.disk_gb} GB</span>
                 </Show>
               </div>
@@ -165,15 +166,15 @@ export default function MachinePage() {
         }>
           {(h) => (
             <div class="card">
-              <h3 style={{ "margin-bottom": "12px", "font-size": "14px", color: "#e6edf3" }}>Docker Status</h3>
+              <h3 style={{ "margin-bottom": "12px", "font-size": "14px", color: "#e6edf3" }}>{t("Docker Status")}</h3>
               <div class="card-grid">
-                <span class="card-label">Connection</span>
+                <span class="card-label">{t("Connection")}</span>
                 <span class={`state-badge ${h().docker_connected ? "state-running" : "state-stopped"}`}>
-                  {h().docker_connected ? "Connected" : "Disconnected"}
+                  {h().docker_connected ? t("Connected") : t("Disconnected")}
                 </span>
 
                 <Show when={h().docker_version}>
-                  <span class="card-label">Version</span>
+                  <span class="card-label">{t("Version")}</span>
                   <span class="card-value">{h().docker_version}</span>
                 </Show>
               </div>
@@ -185,13 +186,13 @@ export default function MachinePage() {
         <Show when={health()?.system_resources}>
           {(res) => (
             <div class="card">
-              <h3 style={{ "margin-bottom": "12px", "font-size": "14px", color: "#e6edf3" }}>System Resources</h3>
+              <h3 style={{ "margin-bottom": "12px", "font-size": "14px", color: "#e6edf3" }}>{t("System Resources")}</h3>
               <div class="card-grid" style={{ "margin-bottom": "16px" }}>
-                <span class="card-label">CPU Cores</span>
+                <span class="card-label">{t("CPU Cores")}</span>
                 <span class="card-value">{res().cpu_count}</span>
               </div>
               <UsageBar
-                label="Memory"
+                label={t("Memory")}
                 used={res().memory_total_bytes - res().memory_available_bytes}
                 total={res().memory_total_bytes}
               />
@@ -209,34 +210,34 @@ export default function MachinePage() {
           {(du) => (
             <div class="card">
               <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "12px" }}>
-                <h3 style={{ "font-size": "14px", color: "#e6edf3" }}>Docker Disk Usage</h3>
+                <h3 style={{ "font-size": "14px", color: "#e6edf3" }}>{t("Docker Disk Usage")}</h3>
                 <button
                   class="btn btn-sm"
                   onClick={pruneAll}
                   disabled={pruning()}
-                  title="Remove unused images, containers, and build cache"
+                  title={t("Remove unused images, containers, and build cache")}
                   style={{ "font-size": "11px", padding: "2px 8px" }}
                 >
-                  {pruning() ? "Pruning..." : "Prune All"}
+                  {pruning() ? t("Pruning...") : t("Prune All")}
                 </button>
               </div>
               <div class="card-grid">
-                <span class="card-label">Images</span>
+                <span class="card-label">{t("Images")}</span>
                 <span class="card-value">{formatBytes(du().images_size_bytes)}</span>
 
-                <span class="card-label">Containers</span>
+                <span class="card-label">{t("Containers")}</span>
                 <span class="card-value">{formatBytes(du().containers_size_bytes)}</span>
 
-                <span class="card-label">Volumes</span>
+                <span class="card-label">{t("Volumes")}</span>
                 <span class="card-value">{formatBytes(du().volumes_size_bytes)}</span>
 
-                <span class="card-label">Build Cache</span>
+                <span class="card-label">{t("Build Cache")}</span>
                 <span class="card-value">{formatBytes(du().build_cache_size_bytes)}</span>
 
-                <span class="card-label">Total</span>
+                <span class="card-label">{t("Total")}</span>
                 <span class="card-value" style={{ "font-weight": "600" }}>{formatBytes(du().total_size_bytes)}</span>
 
-                <span class="card-label">Reclaimable</span>
+                <span class="card-label">{t("Reclaimable")}</span>
                 <span class="card-value" style={{ color: du().reclaimable_bytes > 1024 * 1024 * 1024 ? "#d29922" : "#8b949e" }}>
                   {formatBytes(du().reclaimable_bytes)}
                 </span>
@@ -249,7 +250,7 @@ export default function MachinePage() {
       {/* Warnings */}
       <Show when={health()?.warnings && health()!.warnings.length > 0}>
         <div class="card" style={{ "max-width": "900px", "margin-top": "16px", "border-color": "#d29922" }}>
-          <h3 style={{ "margin-bottom": "8px", "font-size": "14px", color: "#d29922" }}>Warnings</h3>
+          <h3 style={{ "margin-bottom": "8px", "font-size": "14px", color: "#d29922" }}>{t("Warnings")}</h3>
           <For each={health()!.warnings}>
             {(warning) => (
               <div style={{ padding: "4px 0", color: "#e6edf3", "font-size": "13px" }}>
