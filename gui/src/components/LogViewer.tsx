@@ -2,6 +2,7 @@ import { createSignal, onMount, onCleanup, Show, createEffect, For, createMemo }
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { copyToClipboard } from "../lib/clipboard";
+import { t } from "../lib/i18n";
 import Dropdown from "./Dropdown";
 
 interface LogViewerProps {
@@ -120,7 +121,7 @@ export default function LogViewer(props: LogViewerProps) {
       })) as string[];
       setLines(processLines(result));
     } catch (e) {
-      setLines([`Error fetching logs: ${e}`]);
+      setLines([t("Error fetching logs: {error}", { error: String(e) })]);
     }
     setLoading(false);
   };
@@ -326,8 +327,8 @@ export default function LogViewer(props: LogViewerProps) {
     <div class="log-viewer">
       <div class="log-header">
         <div class="log-header-left">
-          <span class="log-title">Logs: {props.containerName}</span>
-          <span class="log-count">{filtered().length} lines</span>
+          <span class="log-title">{t("Logs")}: {props.containerName}</span>
+          <span class="log-count">{t("{count} lines", { count: filtered().length })}</span>
         </div>
         <div class="log-header-right">
           <div style={{ position: "relative", display: "inline-flex", "align-items": "center", gap: "4px" }}>
@@ -336,7 +337,7 @@ export default function LogViewer(props: LogViewerProps) {
               class="search-input"
               style={{ width: "320px", "padding-right": "28px" }}
               type="text"
-              placeholder="Filter logs... (Ctrl+F)"
+              placeholder={t("Filter logs... (Ctrl+F)")}
               value={filter()}
               onInput={(e) => setFilter(e.currentTarget.value)}
             />
@@ -344,7 +345,7 @@ export default function LogViewer(props: LogViewerProps) {
               <button
                 class="search-clear-btn"
                 onClick={() => setFilter("")}
-                title="Clear filter"
+                title={t("Clear filter")}
                 type="button"
               >
                 &times;
@@ -352,31 +353,31 @@ export default function LogViewer(props: LogViewerProps) {
             </Show>
             <button
               onClick={() => setUseRegex(!useRegex())}
-              title={useRegex() ? "Regex mode (click to switch to plain text)" : "Plain text mode (click to switch to regex)"}
+              title={useRegex() ? t("Regex mode (click to switch to plain text)") : t("Plain text mode (click to switch to regex)")}
               style={toggleBtnStyle(useRegex())}
             >
               .*
             </button>
             <button
               onClick={() => setCaseSensitive(!caseSensitive())}
-              title={caseSensitive() ? "Case sensitive (click for insensitive)" : "Case insensitive (click for sensitive)"}
+              title={caseSensitive() ? t("Case sensitive (click for insensitive)") : t("Case insensitive (click for sensitive)")}
               style={toggleBtnStyle(caseSensitive())}
             >
               Aa
             </button>
             <Show when={filter().length > 0}>
               <span style={{ "font-size": "11px", color: "#8b949e", "white-space": "nowrap" }}>
-                {matchCount()} matches
+                {t("{count} matches", { count: matchCount() })}
               </span>
             </Show>
           </div>
           <Dropdown
             value={String(tail())}
             options={[
-              { value: "100", label: "100 lines" },
-              { value: "500", label: "500 lines" },
-              { value: "2000", label: "2,000 lines" },
-              { value: "10000", label: "10,000 lines" },
+              { value: "100", label: t("100 lines") },
+              { value: "500", label: t("500 lines") },
+              { value: "2000", label: t("2,000 lines") },
+              { value: "10000", label: t("10,000 lines") },
             ]}
             onChange={(v) => {
               setTail(Number(v));
@@ -394,24 +395,24 @@ export default function LogViewer(props: LogViewerProps) {
               }
             }}
           >
-            Auto-scroll
+            {t("Auto-scroll")}
           </button>
           <div style={{ display: "flex", "align-items": "center", gap: "1px", background: "#21262d", "border-radius": "4px", padding: "0 2px" }}>
-            <button class="action-icon" onClick={() => changeFontSize(-1)} title="Decrease font size" style={{ "font-size": "14px", "font-weight": "700", width: "24px" }}>&minus;</button>
+            <button class="action-icon" onClick={() => changeFontSize(-1)} title={t("Decrease font size")} style={{ "font-size": "14px", "font-weight": "700", width: "24px" }}>&minus;</button>
             <span style={{ "font-size": "10px", color: "#8b949e", "min-width": "24px", "text-align": "center" }}>{fontSize()}</span>
-            <button class="action-icon" onClick={() => changeFontSize(1)} title="Increase font size" style={{ "font-size": "14px", "font-weight": "700", width: "24px" }}>+</button>
+            <button class="action-icon" onClick={() => changeFontSize(1)} title={t("Increase font size")} style={{ "font-size": "14px", "font-weight": "700", width: "24px" }}>+</button>
           </div>
-          <button class="action-icon" onClick={copyAll} title="Copy all logs">
+          <button class="action-icon" onClick={copyAll} title={t("Copy all logs")}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
           </button>
-          <button class="action-icon" onClick={downloadLogs} title="Download logs">
+          <button class="action-icon" onClick={downloadLogs} title={t("Download logs")}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           </button>
-          <button class="action-icon" onClick={reloadLogs} title="Refresh">
+          <button class="action-icon" onClick={reloadLogs} title={t("Refresh")}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
           </button>
           <Show when={props.onClose}>
-            <button class="action-icon" onClick={() => props.onClose?.()} title="Close">
+            <button class="action-icon" onClick={() => props.onClose?.()} title={t("Close")}>
               {"\u2715"}
             </button>
           </Show>
@@ -420,7 +421,7 @@ export default function LogViewer(props: LogViewerProps) {
       <Show
         when={!loading() || lines().length > 0}
         fallback={
-          <div class="log-loading">Loading logs...</div>
+          <div class="log-loading">{t("Loading logs...")}</div>
         }
       >
         <div style={{ position: "relative", flex: "1", "min-height": "0", display: "flex", "flex-direction": "column" }}>
@@ -444,9 +445,9 @@ export default function LogViewer(props: LogViewerProps) {
               "box-shadow": "0 4px 12px rgba(0,0,0,0.4)",
               "font-family": "inherit",
             }}
-            title="Click to resume auto-scroll and load buffered lines"
+            title={t("Click to resume auto-scroll and load buffered lines")}
           >
-            {pendingLines().length} new lines — click to resume
+            {t("{count} new lines — click to resume", { count: pendingLines().length })}
           </button>
         </Show>
         <div
@@ -457,7 +458,7 @@ export default function LogViewer(props: LogViewerProps) {
         >
           <Show when={filtered().length > 0} fallback={
             <div style={{ "font-family": "'JetBrains Mono NF', monospace", "font-size": `${fontSize()}px`, color: "#8b949e", padding: "8px" }}>
-              (no log output)
+              {t("(no log output)")}
             </div>
           }>
             <For each={filtered()}>

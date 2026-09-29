@@ -1,5 +1,6 @@
 import { createSignal, createEffect, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../lib/i18n";
 
 interface ConnectionScreenProps {
   status: string; // "connecting" | "disconnected" | "stopped"
@@ -53,42 +54,44 @@ export default function ConnectionScreen(props: ConnectionScreenProps) {
 
       <Show when={props.status === "connecting"}>
         <div class="connection-spinner" />
-        <h2 class="connection-title">Starting Orca...</h2>
+        <h2 class="connection-title">{t("Starting Orca...")}</h2>
         <p class="connection-subtitle">
-          Connecting to the Orca daemon and Docker runtime.
+          {t("Connecting to the Orca daemon and Docker runtime.")}
         </p>
       </Show>
 
       <Show when={props.status !== "connecting"}>
-        <h2 class="connection-title">Orca daemon is not running</h2>
+        <h2 class="connection-title">{t("Orca daemon is not running")}</h2>
         <p class="connection-subtitle">
-          The Orca daemon manages your containers and must be running for Orca Desktop to work.
+          {t("The Orca daemon manages your containers and must be running for Orca Desktop to work.")}
         </p>
 
         <Show when={error()}>
           <div class="connection-error">
             <div style={{ "font-weight": "600", "margin-bottom": "6px" }}>
-              Failed to start daemon
+              {t("Failed to start daemon")}
             </div>
             <div style={{ "margin-bottom": "8px" }}>{error()}</div>
             <div style={{ "margin-top": "8px", "line-height": "1.8", "font-size": "12px" }}>
-              <p style={{ "margin-bottom": "8px" }}>The daemon binary (<code>orca-daemon</code>) was not found. To fix this:</p>
+              <p style={{ "margin-bottom": "8px" }}>
+                {t("The daemon binary")} (<code>orca-daemon</code>) {t("was not found. To fix this:")}
+              </p>
               <ol style={{ margin: "0", "padding-left": "18px" }}>
                 <li>
                   <a href="https://github.com/edvin/orca/actions" target="_blank" rel="noopener noreferrer" style={{ color: "#58a6ff" }}>
-                    Download orca-daemon
+                    {t("Download orca-daemon")}
                   </a>{" "}
-                  from GitHub Actions artifacts
+                  {t("from GitHub Actions artifacts")}
                 </li>
                 <li>
-                  Place it in your PATH or next to the Orca Desktop app
+                  {t("Place it in your PATH or next to the Orca Desktop app")}
                 </li>
                 <li>
-                  Click <strong>Retry Connection</strong> below
+                  {t("Click Retry Connection below")}
                 </li>
               </ol>
               <p style={{ "margin-top": "8px", color: "#8b949e" }}>
-                Or start it manually: <code>orca-daemon</code>
+                {t("Or start it manually:")} <code>orca-daemon</code>
               </p>
             </div>
           </div>
@@ -100,16 +103,16 @@ export default function ConnectionScreen(props: ConnectionScreenProps) {
             onClick={startDaemon}
             disabled={starting()}
           >
-            {starting() ? "Starting..." : "Start Daemon"}
+            {starting() ? t("Starting...") : t("Start Daemon")}
           </button>
           <button class="btn" onClick={() => props.onRetry()}>
-            Retry Connection
+            {t("Retry Connection")}
           </button>
         </div>
 
         <Show when={daemonPath()}>
           <div class="connection-hint">
-            Looking for daemon at: <code>{daemonPath()}</code>
+            {t("Looking for daemon at: {path}", { path: daemonPath()! })}
           </div>
         </Show>
       </Show>

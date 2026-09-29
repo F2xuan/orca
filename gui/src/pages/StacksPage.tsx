@@ -1,4 +1,5 @@
 import { createSignal, onMount, onCleanup, For, Show } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import type { ComposeProject } from "../lib/types";
 import { formatPorts } from "../lib/format";
@@ -33,11 +34,11 @@ export default function StacksPage(props: StacksPageProps) {
     try {
       await invoke("stop_container", { id: containerId });
       await invoke("start_container", { id: containerId });
-      showToast("Service restarted", "success");
+      showToast(t("Service restarted"), "success");
       await refresh();
     } catch (err) {
       logError("Restart service", `Service ${containerId}: ${err}`);
-      showToast(`Restart failed: ${err}`, "error");
+      showToast(t("Restart failed: {error}", { error: String(err) }), "error");
     }
     setServiceLoading(null);
   };
@@ -91,11 +92,11 @@ export default function StacksPage(props: StacksPageProps) {
   const statusConfig = (status: string) => {
     switch (status) {
       case "Running":
-        return { class: "state-running", label: "Running" };
+        return { class: "state-running", label: t("Running") };
       case "Partial":
-        return { class: "state-paused", label: "Partial" };
+        return { class: "state-paused", label: t("Partial") };
       case "Stopped":
-        return { class: "state-exited", label: "Stopped" };
+        return { class: "state-exited", label: t("Stopped") };
       default:
         return { class: "state-created", label: status };
     }
@@ -120,7 +121,7 @@ export default function StacksPage(props: StacksPageProps) {
     <div>
       <div class="page-header">
         <h1 class="page-title">
-          Stacks
+          {t("Stacks")}
           <span
             style={{
               "font-size": "13px",
@@ -134,7 +135,7 @@ export default function StacksPage(props: StacksPageProps) {
           <LastUpdated timestamp={lastUpdated()} />
         </h1>
         <button class="btn" onClick={refresh}>
-          Refresh
+          {t("Refresh")}
         </button>
       </div>
 
@@ -164,7 +165,7 @@ export default function StacksPage(props: StacksPageProps) {
                 class="btn btn-sm"
                 onClick={() => setComposeOutput(null)}
               >
-                Dismiss
+                {t("Dismiss")}
               </button>
             </div>
             <Show when={co().output.stdout}>
@@ -204,11 +205,10 @@ export default function StacksPage(props: StacksPageProps) {
         fallback={
           <div class="empty">
             <div class="empty-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7v10c0 1.1.9 2 2 2h12a2 2 0 002-2V7"/><path d="M7 4h10a2 2 0 012 2v1H5V6a2 2 0 012-2z"/><line x1="9" y1="11" x2="15" y2="11"/><line x1="9" y1="14" x2="13" y2="14"/></svg></div>
-            <p class="empty-title">No compose stacks detected</p>
+            <p class="empty-title">{t("No compose stacks detected")}</p>
             <p>
-              Run{" "}
-              <code style={{ color: "#c9d1d9" }}>docker compose up</code> in
-              a project directory to see it here
+              {t("Run")}{" "}
+              <code style={{ color: "#c9d1d9" }}>docker compose up</code> {t("in a project directory to see it here")}
             </p>
           </div>
         }
@@ -274,14 +274,14 @@ export default function StacksPage(props: StacksPageProps) {
                             <button
                               class="btn btn-sm"
                               style={{ padding: "0px 4px", "font-size": "10px", "line-height": "1.3", "margin-left": "4px", "vertical-align": "middle" }}
-                              title="Copy stack directory path"
+                              title={t("Copy stack directory path")}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 navigator.clipboard.writeText(stack.working_dir!);
-                                showToast("Path copied to clipboard", "success");
+                                showToast(t("Path copied to clipboard"), "success");
                               }}
                             >
-                              Copy path
+                              {t("Copy path")}
                             </button>
                           </Show>
                         </div>
@@ -301,7 +301,7 @@ export default function StacksPage(props: StacksPageProps) {
                             }
                             disabled={isLoading()}
                           >
-                            Start
+                            {t("Start")}
                           </button>
                         </Show>
                         <Show when={stack.status !== "Stopped"}>
@@ -312,7 +312,7 @@ export default function StacksPage(props: StacksPageProps) {
                             }
                             disabled={isLoading()}
                           >
-                            Stop
+                            {t("Stop")}
                           </button>
                         </Show>
                         {/* Compose CLI actions (full lifecycle) */}
@@ -331,14 +331,14 @@ export default function StacksPage(props: StacksPageProps) {
                           <button
                             class="btn btn-sm btn-danger"
                             onClick={async (e) => {
-                              if (await confirmDanger("Compose Down", `Run docker compose down for '${stack.name}'? This will stop and remove all containers in the stack.`)) {
+                              if (await confirmDanger(t("Compose Down"), t("Run docker compose down for '{name}'? This will stop and remove all containers in the stack.", { name: stack.name }))) {
                                 doStackAction("compose_down", stack.name, e);
                               }
                             }}
                             disabled={isLoading()}
                             title="docker compose down"
                           >
-                            Down
+                            {t("Down")}
                           </button>
                           <button
                             class="btn btn-sm"
@@ -348,7 +348,7 @@ export default function StacksPage(props: StacksPageProps) {
                             disabled={isLoading()}
                             title="docker compose pull"
                           >
-                            Pull
+                            {t("Pull")}
                           </button>
                         </Show>
                       </div>
@@ -360,11 +360,11 @@ export default function StacksPage(props: StacksPageProps) {
                       <table class="table">
                         <thead>
                           <tr>
-                            <th>Service</th>
-                            <th>Image</th>
-                            <th>State</th>
-                            <th>Ports</th>
-                            <th style={{ "text-align": "right" }}>Actions</th>
+                            <th>{t("Service")}</th>
+                            <th>{t("Image")}</th>
+                            <th>{t("State")}</th>
+                            <th>{t("Ports")}</th>
+                            <th style={{ "text-align": "right" }}>{t("Actions")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -411,7 +411,7 @@ export default function StacksPage(props: StacksPageProps) {
                                         })
                                       }
                                     >
-                                      Logs
+                                      {t("Logs")}
                                     </button>
                                     <Show when={serviceLoading() === svc.container_id}>
                                       <Spinner />
@@ -427,7 +427,7 @@ export default function StacksPage(props: StacksPageProps) {
                                         }}
                                         disabled={serviceLoading() === svc.container_id}
                                       >
-                                        Start
+                                        {t("Start")}
                                       </button>
                                     </Show>
                                     <Show when={svc.state === "Running"}>
@@ -441,14 +441,14 @@ export default function StacksPage(props: StacksPageProps) {
                                         }}
                                         disabled={serviceLoading() === svc.container_id}
                                       >
-                                        Stop
+                                        {t("Stop")}
                                       </button>
                                       <button
                                         class="btn btn-sm"
                                         onClick={() => restartService(svc.container_id)}
                                         disabled={serviceLoading() === svc.container_id}
                                       >
-                                        Restart
+                                        {t("Restart")}
                                       </button>
                                     </Show>
                                   </div>

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import type { SystemHealth, ActiveHost } from "../lib/types";
 import { showToast } from "./Toast";
+import { t } from "../lib/i18n";
 import { confirm } from "./ConfirmDialog";
 import { getOllamaSetupState, getOllamaSetupStatus, isOllamaSetupRunning } from "../lib/ollamaSetup";
 
@@ -53,9 +54,12 @@ export default function StatusBar(props: StatusBarProps) {
     if (!info) return;
 
     const confirmed = await confirm({
-      title: "Update Available",
-      message: `Update to Orca Desktop v${info.version}?\n\nThe app will download the update and restart.${info.body ? `\n\nWhat's new:\n${info.body}` : ""}`,
-      confirmLabel: "Update",
+      title: t("Update Available"),
+      message: t("Update to Orca Desktop v{version}?\n\nThe app will download the update and restart.{body}", {
+        version: info.version,
+        body: info.body ? t("\n\nWhat's new:\n{body}", { body: info.body }) : "",
+      }),
+      confirmLabel: t("Update"),
     });
     if (!confirmed) return;
 
@@ -64,7 +68,7 @@ export default function StatusBar(props: StatusBarProps) {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (update) {
-        showToast("Downloading update...", "info");
+        showToast(t("Downloading update..."), "info");
         // Stop the daemon before installing so the installer can replace the binary
         try { await invoke("stop_daemon"); } catch { /* ignore */ }
         await update.downloadAndInstall();
@@ -72,7 +76,7 @@ export default function StatusBar(props: StatusBarProps) {
         await relaunch();
       }
     } catch (e) {
-      showToast(`Update failed: ${e}`, "error");
+      showToast(t("Update failed: {error}", { error: String(e) }), "error");
       setInstalling(false);
     }
   };
@@ -82,13 +86,13 @@ export default function StatusBar(props: StatusBarProps) {
     // Check for updates after 5 seconds, then every hour. The initial
     // setTimeout handle must be captured so we can cancel it if the
     // component unmounts before the 5s elapses.
-    const t = setTimeout(checkUpdate, 5000);
+    const initialUpdateTimer = setTimeout(checkUpdate, 5000);
     const updateInterval = setInterval(checkUpdate, 3600000);
     getVersion().then((v) => { if (!disposed) setAppVersion(v); }).catch(() => {});
     const interval = setInterval(pollHealth, 15000);
     onCleanup(() => {
       disposed = true;
-      clearTimeout(t);
+      clearTimeout(initialUpdateTimer);
       clearInterval(interval);
       clearInterval(updateInterval);
     });
@@ -117,7 +121,7 @@ export default function StatusBar(props: StatusBarProps) {
     <div class="status-bar">
       <div class="status-bar-left">
         <Show when={activeHost()}>
-          <span class="status-bar-item" title={activeHost()!.is_remote ? `Connected to ${activeHost()!.url}` : "Local daemon"}>
+          <span class="status-bar-item" title={activeHost()!.is_remote ? t("Connected to {url}", { url: activeHost()!.url }) : t("Local daemon")}>
             <span class="status-bar-dot" style={{ background: activeHost()!.is_remote ? "#58a6ff" : "#3fb950" }} />
             {activeHost()!.name}
           </span>
@@ -132,26 +136,26 @@ export default function StatusBar(props: StatusBarProps) {
         <Show when={health()?.docker_connected === false}>
           <span class="status-bar-item">
             <span class="status-bar-dot" style={{ background: "#f85149" }} />
-            Disconnected
+            {t("Disconnected")}
           </span>
         </Show>
 
         <Show when={health()?.system_resources}>
           <span class="status-bar-separator" />
-          <span class="status-bar-item" title={`CPU: ${health()!.system_resources!.cpu_count} cores`}>
+          <span class="status-bar-item" title={t("CPU: {count} cores", { count: health()!.system_resources!.cpu_count })}>
             CPU {health()!.system_resources!.cpu_count}
           </span>
           <span class="status-bar-separator" />
-          <span class="status-bar-item" title={`Memory: ${memPercent().toFixed(0)}% used`}>
-            RAM
+          <span class="status-bar-item" title={t("Memory: {percent}% used", { percent: memPercent().toFixed(0) })}>
+            {t("RAM")}
             <span class="status-bar-mini-bar">
               <span class="status-bar-mini-fill" style={{ width: `${memPercent()}%`, background: barColor(memPercent()) }} />
             </span>
             {memPercent().toFixed(0)}%
           </span>
           <span class="status-bar-separator" />
-          <span class="status-bar-item" title={`Disk: ${diskPercent().toFixed(0)}% used`}>
-            Disk
+          <span class="status-bar-item" title={t("Disk: {percent}% used", { percent: diskPercent().toFixed(0) })}>
+            {t("Disk")}
             <span class="status-bar-mini-bar">
               <span class="status-bar-mini-fill" style={{ width: `${diskPercent()}%`, background: barColor(diskPercent()) }} />
             </span>
@@ -176,7 +180,7 @@ export default function StatusBar(props: StatusBarProps) {
             class="status-bar-item status-bar-warning status-bar-clickable"
             onClick={() => props.onNavigate?.("environment")}
           >
-            ⚠ {health()!.warnings.length} warning{health()!.warnings.length > 1 ? "s" : ""}
+            ⚠ {t("{count} warnings", { count: health()!.warnings.length })}
           </span>
         </Show>
 
@@ -212,8 +216,8 @@ export default function StatusBar(props: StatusBarProps) {
             disabled={installing()}
           >
             {installing()
-              ? "Installing..."
-              : `Update available: v${updateAvailable()!.version}`}
+              ? t("Installing...")
+              : t("Update available: {version}", { version: `v${updateAvailable()!.version}` })}
           </button>
         </Show>
         <Show when={appVersion()}>

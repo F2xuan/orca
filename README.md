@@ -10,6 +10,15 @@
 </p>
 
 <p align="center">
+  <strong>English</strong> | <a href="./README.zh-CN.md">简体中文 (Chinese)</a>
+</p>
+
+> [!IMPORTANT]
+> **Fork Notice:** This repository is a fork of [edvin/orca](https://github.com/edvin/orca), an open-source container management desktop app with built-in AI. This fork adds **Simplified Chinese localization (i18n)** to the desktop UI and provides Chinese documentation ([README.zh-CN.md](./README.zh-CN.md)). Full credit for the original project goes to [@edvin](https://github.com/edvin) and the upstream contributors — see the [upstream repository](https://github.com/edvin/orca) for official releases and the issue tracker. Because release signing keys are not available to forks, this fork does not publish installers; please download official builds from the upstream [Releases](https://github.com/edvin/orca/releases) page.
+>
+> **About the localization:** The i18n framework lives in `gui/src/lib/i18n.ts` with the Chinese dictionary in `gui/src/lib/locales/zh-CN.ts` (1600+ entries, covering every page and component). Switch languages via **Settings → Preferences** or the command palette (`Ctrl/Cmd+K`, type "Language"); the choice applies instantly and persists. Missing entries fall back to English. Everything else matches upstream.
+
+<p align="center">
   <img src="screenshots/01-dashboard.png" alt="Orca Desktop Dashboard" width="800" />
 </p>
 
@@ -823,6 +832,8 @@ This triggers the release workflow which:
 Contributions welcome! Please open an issue first to discuss what you'd like to change.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+
+> This repository is a community-maintained fork of [edvin/orca](https://github.com/edvin/orca) with Simplified Chinese localization. For upstream features, releases, and support, please refer to the original project. 此仓库为 [edvin/orca](https://github.com/edvin/orca) 的社区维护 fork，附带简体中文本地化 — 有关上游功能、发布与支持，请参考原项目。
 
 ## Package Hosting
 

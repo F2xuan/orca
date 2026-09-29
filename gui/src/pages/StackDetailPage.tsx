@@ -1,4 +1,5 @@
 import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import type { ComposeProject } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
@@ -63,17 +64,17 @@ export default function StackDetailPage(props: StackDetailPageProps) {
       if (result && typeof result === "object") {
         const output = result as any;
         if (!output.success) {
-          showToast(`${action.replace(/_/g, " ")} failed: ${output.stderr || "Unknown error"}`, "error");
+          showToast(t("{action} failed: {error}", { action: action.replace(/_/g, " "), error: output.stderr || t("Unknown error") }), "error");
         } else {
-          showToast(`${action.replace(/_/g, " ")} succeeded`, "success");
+          showToast(t("{action} succeeded", { action: action.replace(/_/g, " ") }), "success");
         }
       } else {
-        showToast(`${action.replace(/_/g, " ")} succeeded`, "success");
+        showToast(t("{action} succeeded", { action: t(action.replace(/_/g, " ")) }), "success");
       }
       setTimeout(fetchStack, 500);
     } catch (err) {
       logError(`Failed to ${action.replace(/_/g, " ")} stack: ${err}`, `Stack "${props.stackName}"`);
-      showToast(`${action} failed: ${err}`, "error");
+      showToast(t("{action} failed: {error}", { action, error: String(err) }), "error");
     }
     setActionInProgress(false);
   };
@@ -83,11 +84,11 @@ export default function StackDetailPage(props: StackDetailPageProps) {
     try {
       await invoke("stop_container", { id: containerId });
       await invoke("start_container", { id: containerId });
-      showToast("Service restarted", "success");
+      showToast(t("Service restarted"), "success");
       await fetchStack();
     } catch (err) {
       logError(`Failed to restart service: ${err}`, `Stack "${props.stackName}", service ${containerId}`);
-      showToast(`Restart failed: ${err}`, "error");
+      showToast(t("Restart failed: {error}", { error: String(err) }), "error");
     }
     setServiceLoading(null);
   };
@@ -95,11 +96,11 @@ export default function StackDetailPage(props: StackDetailPageProps) {
   const statusConfig = (status: string) => {
     switch (status) {
       case "Running":
-        return { class: "state-running", label: "Running" };
+        return { class: "state-running", label: t("Running") };
       case "Partial":
-        return { class: "state-paused", label: "Partial" };
+        return { class: "state-paused", label: t("Partial") };
       case "Stopped":
-        return { class: "state-exited", label: "Stopped" };
+        return { class: "state-exited", label: t("Stopped") };
       default:
         return { class: "state-created", label: status };
     }
@@ -121,7 +122,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
   };
 
   const breadcrumbItems = () => [
-    { label: "Stacks", onClick: () => props.onBack() },
+    { label: t("Stacks"), onClick: () => props.onBack() },
     { label: props.stackName },
   ];
 
@@ -140,7 +141,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
           when={stack()}
           fallback={
             <div class="detail-page-info">
-              <div class="detail-page-name">Loading...</div>
+              <div class="detail-page-name">{t("Loading...")}</div>
             </div>
           }
         >
@@ -149,15 +150,15 @@ export default function StackDetailPage(props: StackDetailPageProps) {
               <div class="detail-page-info">
                 <div class="detail-page-name">{s().name}</div>
                 <div class="detail-page-image" style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-                  {s().working_dir || "No working directory"}
+                  {s().working_dir || t("No working directory")}
                   <Show when={s().working_dir}>
                     <button
                       class="btn btn-sm"
                       style={{ padding: "1px 6px", "font-size": "11px", "line-height": "1.4" }}
-                      title="Copy stack directory path"
+                      title={t("Copy stack directory path")}
                       onClick={() => {
                         navigator.clipboard.writeText(s().working_dir!);
-                        showToast("Path copied to clipboard", "success");
+                        showToast(t("Path copied to clipboard"), "success");
                       }}
                     >
                       Copy path
@@ -184,7 +185,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
                     class="btn btn-sm"
                     onClick={async () => {
                       const ok = await confirmDanger({
-                        title: "Compose Down",
+                        title: t("Compose Down"),
                         message: "This will stop and remove the stack's containers. Continue?",
                         confirmLabel: "Down",
                       });
@@ -192,7 +193,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
                       doStackAction("compose_down");
                     }}
                     disabled={actionInProgress()}
-                    title="Stop stack"
+                    title={t("Stop stack")}
                   >
                     &#9632; Stop
                   </button>
@@ -202,7 +203,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
                     class="btn btn-sm btn-primary"
                     onClick={() => doStackAction("compose_up")}
                     disabled={actionInProgress()}
-                    title="Start stack"
+                    title={t("Start stack")}
                   >
                     &#9654; Start
                   </button>
@@ -212,7 +213,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
                     class="btn btn-sm"
                     onClick={() => doStackAction("restart_stack")}
                     disabled={actionInProgress()}
-                    title="Restart stack"
+                    title={t("Restart stack")}
                   >
                     &#10227; Restart
                   </button>
@@ -220,7 +221,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
                     class="btn btn-sm"
                     onClick={() => doStackAction("compose_pull")}
                     disabled={actionInProgress()}
-                    title="Pull images"
+                    title={t("Pull Images")}
                   >
                     &#8595; Pull
                   </button>
@@ -277,11 +278,11 @@ export default function StackDetailPage(props: StackDetailPageProps) {
             <table class="table">
               <thead>
                 <tr>
-                  <th>Service</th>
-                  <th>Image</th>
-                  <th>State</th>
-                  <th>Ports</th>
-                  <th style={{ "text-align": "right" }}>Actions</th>
+                  <th>{t("Service")}</th>
+                  <th>{t("Image")}</th>
+                  <th>{t("State")}</th>
+                  <th>{t("Ports")}</th>
+                  <th style={{ "text-align": "right" }}>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -498,7 +499,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
                   "margin-bottom": "8px",
                 }}
               >
-                <span>Compose file has been modified. Restart the stack to apply changes.</span>
+                <span>{t("Compose file has been modified. Restart the stack to apply changes.")}</span>
                 <button
                   class="btn btn-sm btn-primary"
                   onClick={() => {
@@ -522,16 +523,16 @@ export default function StackDetailPage(props: StackDetailPageProps) {
                   onSave={async (content: string) => {
                     const configFile = stack()?.config_file;
                     if (!configFile) {
-                      showToast("No compose file path available", "error");
+                      showToast(t("No compose file path available"), "error");
                       return;
                     }
                     try {
                       await invoke("save_compose_file", { path: configFile, content });
                       setComposeContent(content);
                       setSavedSinceLastRestart(true);
-                      showToast("Compose file saved", "success");
+                      showToast(t("Compose file saved"), "success");
                     } catch (e) {
-                      showToast(`Failed to save: ${e}`, "error");
+                      showToast(t("Failed to save: {error}", { error: String(e) }), "error");
                       throw e;
                     }
                   }}

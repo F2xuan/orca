@@ -1,4 +1,5 @@
 import { createSignal, onMount, For, Show } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import type { Volume, Container } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
@@ -97,7 +98,7 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
       setFileContentPath(path);
     } catch (e) {
       logError(`Failed to read volume file: ${e}`, `Volume "${props.volumeName}", path "${path}"`);
-      showToast(`Failed to read file: ${e}`, "error");
+      showToast(t("Failed to read file: {error}", { error: String(e) }), "error");
     }
     setFileContentLoading(false);
   };
@@ -118,15 +119,15 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
   const [removing, setRemoving] = createSignal(false);
   const doRemove = async () => {
     if (removing()) return;
-    if (!await confirmDanger("Remove Volume", `Remove volume "${props.volumeName}"? This will permanently delete the volume data.`)) return;
+    if (!await confirmDanger(t("Remove Volume"), t("Remove volume \"{name}\"? This will permanently delete the volume data.", { name: props.volumeName }))) return;
     setRemoving(true);
     try {
       await invoke("remove_volume", { name: props.volumeName });
-      showToast(`Volume "${props.volumeName}" removed`, "success");
+      showToast(t("Volume \"{name}\" removed", { name: props.volumeName }), "success");
       props.onBack();
     } catch (err) {
       logError(`Failed to remove volume: ${err}`, `Volume "${props.volumeName}"`);
-      showToast(`Failed to remove volume: ${err}`, "error");
+      showToast(t("Failed to remove volume: {error}", { error: String(err) }), "error");
       setRemoving(false);
     }
   };
@@ -183,9 +184,9 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
       a.download = `volume-${props.volumeName}-listing.txt`;
       a.click();
       URL.revokeObjectURL(url);
-      showToast("File listing exported", "success");
+      showToast(t("File listing exported"), "success");
     } catch (e) {
-      showToast(`Failed to export listing: ${e}`, "error");
+      showToast(t("Failed to export listing: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -204,7 +205,7 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
       {/* Breadcrumb */}
       <Breadcrumb
         items={[
-          { label: "Volumes", onClick: () => props.onBack() },
+          { label: t("Volumes"), onClick: () => props.onBack() },
           { label: props.volumeName },
         ]}
       />
@@ -213,7 +214,7 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
       <div class="detail-page-header">
         <Show when={volume()} fallback={
           <div class="detail-page-info">
-            <div class="detail-page-name">Loading...</div>
+            <div class="detail-page-name">{t("Loading...")}</div>
           </div>
         }>
           {(v) => (
@@ -234,7 +235,7 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
                 <button
                   class="btn btn-sm"
                   onClick={exportFileListing}
-                  title="Export file listing as text"
+                  title={t("Export file listing as text")}
                 >
                   Export Listing
                 </button>
@@ -245,7 +246,7 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
                   style={{ display: "inline-flex", "align-items": "center", gap: "6px" }}
                 >
                   <Show when={removing()}><Spinner size={12} /></Show>
-                  {removing() ? "Removing..." : "Remove"}
+                  {removing() ? t("Removing...") : t("Remove")}
                 </button>
               </div>
             </>
@@ -283,23 +284,23 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
             {(v) => (
               <div class="detail-section">
                 <div class="card-grid">
-                  <div class="card-label">Name</div>
+                  <div class="card-label">{t("Name")}</div>
                   <div class="card-value">{v().name}</div>
 
-                  <div class="card-label">Driver</div>
+                  <div class="card-label">{t("Driver")}</div>
                   <div class="card-value">{v().driver}</div>
 
-                  <div class="card-label">Mount Point</div>
+                  <div class="card-label">{t("Mount Point")}</div>
                   <div class="card-value" style={{ display: "flex", "align-items": "center", gap: "6px" }}>
                     <span class="mono" style={{ "font-size": "12px" }}>{v().mountpoint}</span>
                     <CopyButton text={v().mountpoint} />
                   </div>
 
-                  <div class="card-label">Created</div>
+                  <div class="card-label">{t("Created")}</div>
                   <div class="card-value">{formatTimestamp(v().created_at)}</div>
 
                   <Show when={Object.keys(v().labels).length > 0}>
-                    <div class="card-label">Labels</div>
+                    <div class="card-label">{t("Labels")}</div>
                     <div class="card-value">
                       <For each={Object.entries(v().labels)}>
                         {([k, val]) => (
@@ -326,17 +327,17 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
             <Show when={!containersLoading()}>
               <Show when={containers().length > 0} fallback={
                 <div class="empty" style={{ padding: "40px 0" }}>
-                  <p class="empty-title">No containers use this volume</p>
-                  <p>This volume is not mounted by any container</p>
+                  <p class="empty-title">{t("No containers use this volume")}</p>
+                  <p>{t("This volume is not mounted by any container")}</p>
                 </div>
               }>
                 <table class="table">
                   <thead>
                     <tr>
-                      <th>Name</th>
-                      <th>Image</th>
-                      <th>State</th>
-                      <th>Mount Path</th>
+                      <th>{t("Name")}</th>
+                      <th>{t("Image")}</th>
+                      <th>{t("State")}</th>
+                      <th>{t("Mount Path")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -377,8 +378,8 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
           <div class="detail-section">
             <Show when={!fileBrowsingStarted()}>
               <div class="empty" style={{ padding: "40px 0" }}>
-                <p class="empty-title">Browse Volume Files</p>
-                <p style={{ "margin-bottom": "16px" }}>File browsing uses a temporary Alpine container to read volume contents</p>
+                <p class="empty-title">{t("Browse Volume Files")}</p>
+                <p style={{ "margin-bottom": "16px" }}>{t("File browsing uses a temporary Alpine container to read volume contents")}</p>
                 <button class="btn btn-primary" onClick={startBrowsing}>
                   Browse Files
                 </button>
@@ -390,17 +391,17 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
                 <button
                   class="btn btn-sm"
                   onClick={() => { setFileContent(null); setFileContentPath(null); fetchFiles(); }}
-                  title="Root"
+                  title={t("Root")}
                 >
                   /
                 </button>
                 <Show when={currentPath() && !fileContent()}>
-                  <button class="btn btn-sm" onClick={navigateUp} title="Go up">
+                  <button class="btn btn-sm" onClick={navigateUp} title={t("Go up")}>
                     ..
                   </button>
                 </Show>
                 <Show when={fileContent()}>
-                  <button class="btn btn-sm" onClick={() => { setFileContent(null); setFileContentPath(null); }} title="Back to listing">
+                  <button class="btn btn-sm" onClick={() => { setFileContent(null); setFileContentPath(null); }} title={t("Back to listing")}>
                     Back
                   </button>
                 </Show>
@@ -408,7 +409,7 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
                   <span
                     style={{ cursor: "pointer", color: currentPath() ? "#58a6ff" : "#e6edf3", padding: "2px 4px" }}
                     onClick={() => fetchFiles()}
-                    title="Root"
+                    title={t("Root")}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={{ "vertical-align": "middle" }}><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
                   </span>
@@ -470,11 +471,11 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
                   <Show when={files().length > 0} fallback={
                     <Show when={fileError()} fallback={
                       <div class="empty" style={{ padding: "20px 0" }}>
-                        <p>Empty directory</p>
+                        <p>{t("Empty directory")}</p>
                       </div>
                     }>
                       <div style={{ padding: "16px 20px", color: "#f85149", background: "rgba(248, 81, 73, 0.1)", "border-radius": "6px", margin: "12px 0", "font-size": "13px" }}>
-                        <strong>Error:</strong> {fileError()}
+                        <strong>{t("Error:")}</strong> {fileError()}
                       </div>
                     </Show>
                   }>

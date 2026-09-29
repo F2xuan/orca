@@ -1,6 +1,7 @@
 import { createSignal, Show, For, onMount, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "./Toast";
+import { t } from "../lib/i18n";
 import Spinner from "./Spinner";
 import Dropdown from "./Dropdown";
 
@@ -165,7 +166,7 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
     try {
       // Stage 1: Check if image exists locally
       setStage("pulling");
-      setStageMessage(`Checking if ${imgRef} is available locally...`);
+      setStageMessage(t("Checking if {image} is available locally...", { image: imgRef }));
 
       let needsPull = false;
       try {
@@ -176,20 +177,20 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
 
       // Stage 2: Pull if needed
       if (needsPull) {
-        setStageMessage(`Pulling ${imgRef}...`);
+        setStageMessage(t("Pulling {image}...", { image: imgRef }));
         try {
           await invoke("pull_image", { reference: imgRef });
-          setStageMessage(`Pulled ${imgRef} successfully`);
+          setStageMessage(t("Pulled {image} successfully", { image: imgRef }));
         } catch (pullErr) {
           setStage("error");
-          setErrorMessage(`Failed to pull image: ${pullErr}`);
+          setErrorMessage(t("Failed to pull image: {error}", { error: String(pullErr) }));
           return;
         }
       }
 
       // Stage 3: Create container
       setStage("creating");
-      setStageMessage("Creating container...");
+      setStageMessage(t("Creating container..."));
 
       const envLines = env().split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
       const portLines = ports().split(/[,\n]/).map((l) => l.trim()).filter((l) => l.length > 0);
@@ -210,11 +211,11 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
 
       // Stage 4: Done
       setStage("starting");
-      setStageMessage("Container started!");
+      setStageMessage(t("Container started!"));
 
       const containerId = (result as any)?.id;
       setTimeout(() => {
-        showToast(`Container started from ${imgRef}`, "success");
+        showToast(t("Container started from {image}", { image: imgRef }), "success");
         props.onCreated(containerId);
         props.onClose();
       }, 600);
@@ -239,7 +240,7 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
     <div class="modal-overlay" onMouseDown={handleOverlayMouseDown} onClick={handleOverlayClick}>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h2 class="modal-title">Run Container</h2>
+          <h2 class="modal-title">{t("Run Container")}</h2>
           <Show when={stage() === "form" || stage() === "error"}>
             <button class="modal-close" onClick={() => props.onClose()}>{"\u00d7"}</button>
           </Show>
@@ -259,11 +260,11 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
                 {stageMessage()}
               </div>
               <div class="run-progress-steps">
-                <span class={`run-step ${stage() === "pulling" ? "active" : (stage() !== "form" ? "done" : "")}`}>Pull</span>
+                <span class={`run-step ${stage() === "pulling" ? "active" : (stage() !== "form" ? "done" : "")}`}>{t("Pull")}</span>
                 <span class="run-step-arrow">{"\u2192"}</span>
-                <span class={`run-step ${stage() === "creating" ? "active" : (stage() === "starting" || stage() === "done" ? "done" : "")}`}>Create</span>
+                <span class={`run-step ${stage() === "creating" ? "active" : (stage() === "starting" || stage() === "done" ? "done" : "")}`}>{t("Create")}</span>
                 <span class="run-step-arrow">{"\u2192"}</span>
-                <span class={`run-step ${stage() === "starting" || stage() === "done" ? "active done" : ""}`}>Start</span>
+                <span class={`run-step ${stage() === "starting" || stage() === "done" ? "active done" : ""}`}>{t("Start")}</span>
               </div>
             </div>
           </div>
@@ -278,15 +279,15 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
               "border-radius": "8px",
               padding: "16px",
             }}>
-              <div style={{ color: "#f85149", "font-weight": "600", "margin-bottom": "8px" }}>Failed to start container</div>
+              <div style={{ color: "#f85149", "font-weight": "600", "margin-bottom": "8px" }}>{t("Failed to start container")}</div>
               <div class="mono" style={{ color: "#e6edf3", "font-size": "12px", "word-break": "break-all" }}>
                 {errorMessage()}
               </div>
             </div>
           </div>
           <div class="modal-footer">
-            <button class="btn" onClick={() => setStage("form")}>Back</button>
-            <button class="btn" onClick={() => props.onClose()}>Close</button>
+            <button class="btn" onClick={() => setStage("form")}>{t("Back")}</button>
+            <button class="btn" onClick={() => props.onClose()}>{t("Close")}</button>
           </div>
         </Show>
 
@@ -296,7 +297,7 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
             <div class="modal-body">
               <div class="form-row">
                 <div class="form-group" style={{ flex: 2, position: "relative" }}>
-                  <label class="form-label">Image <span style={{ color: "#f85149" }}>*</span></label>
+                  <label class="form-label">{t("Image")} <span style={{ color: "#f85149" }}>*</span></label>
                   <input
                     class="form-input mono"
                     type="text"
@@ -340,16 +341,16 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
                       color: "#8b949e",
                       "font-size": "11px",
                     }}>
-                      loading tags...
+                      {t("loading tags...")}
                     </div>
                   </Show>
                 </div>
                 <div class="form-group" style={{ flex: 1 }}>
-                  <label class="form-label">Name</label>
+                  <label class="form-label">{t("Name")}</label>
                   <input
                     class="form-input"
                     type="text"
-                    placeholder="Optional"
+                    placeholder={t("Optional")}
                     value={name()}
                     onInput={(e) => setName(e.currentTarget.value)}
                   />
@@ -357,7 +358,7 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
               </div>
 
               <div class="form-group">
-                <label class="form-label">Port Mappings</label>
+                <label class="form-label">{t("Port Mappings")}</label>
                 <input
                   class="form-input mono"
                   type="text"
@@ -365,11 +366,11 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
                   value={ports()}
                   onInput={(e) => setPorts(e.currentTarget.value)}
                 />
-                <span class="form-hint">host:container — comma or newline separated</span>
+                <span class="form-hint">{t("host:container — comma or newline separated")}</span>
               </div>
 
               <div class="form-group">
-                <label class="form-label">Environment Variables</label>
+                <label class="form-label">{t("Environment Variables")}</label>
                 <textarea
                   class="form-textarea mono"
                   placeholder={"KEY=value\nDATABASE_URL=postgres://..."}
@@ -385,12 +386,12 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
                 onClick={() => setShowAdvanced(!showAdvanced())}
               >
                 <span class={`advanced-arrow ${showAdvanced() ? "expanded" : ""}`}>&#9654;</span>
-                Advanced Options
+                {t("Advanced Options")}
               </button>
 
               <Show when={showAdvanced()}>
                 <div class="form-group">
-                  <label class="form-label">Command Override</label>
+                  <label class="form-label">{t("Command Override")}</label>
                   <input
                     class="form-input mono"
                     type="text"
@@ -401,7 +402,7 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
                 </div>
 
                 <div class="form-group">
-                  <label class="form-label">Volume Mounts</label>
+                  <label class="form-label">{t("Volume Mounts")}</label>
                   <textarea
                     class="form-textarea mono"
                     placeholder={"/host/path:/container/path"}
@@ -409,11 +410,11 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
                     onInput={(e) => setVolumes(e.currentTarget.value)}
                     rows={2}
                   />
-                  <span class="form-hint">host:container, one per line</span>
+                  <span class="form-hint">{t("host:container, one per line")}</span>
                 </div>
 
                 <div class="form-group">
-                  <label class="form-label">Network</label>
+                  <label class="form-label">{t("Network")}</label>
                   <Dropdown
                     value={network()}
                     options={availableNetworks()}
@@ -423,20 +424,20 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
 
                 <div class="form-row">
                   <div class="form-group" style={{ flex: 1 }}>
-                    <label class="form-label">Restart Policy</label>
+                    <label class="form-label">{t("Restart Policy")}</label>
                     <Dropdown
                       value={restartPolicy()}
                       options={[
-                        { value: "no", label: "No" },
-                        { value: "always", label: "Always" },
-                        { value: "unless-stopped", label: "Unless Stopped" },
-                        { value: "on-failure", label: "On Failure" },
+                        { value: "no", label: t("No") },
+                        { value: "always", label: t("Always") },
+                        { value: "unless-stopped", label: t("Unless Stopped") },
+                        { value: "on-failure", label: t("On Failure") },
                       ]}
                       onChange={(v) => setRestartPolicy(v)}
                     />
                   </div>
                   <div class="form-group" style={{ flex: 1 }}>
-                    <label class="form-label">CPU Limit</label>
+                    <label class="form-label">{t("CPU Limit")}</label>
                     <input
                       class="form-input"
                       type="number"
@@ -448,7 +449,7 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
                     />
                   </div>
                   <div class="form-group" style={{ flex: 1 }}>
-                    <label class="form-label">Memory</label>
+                    <label class="form-label">{t("Memory")}</label>
                     <input
                       class="form-input"
                       type="text"
@@ -462,8 +463,8 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
             </div>
 
             <div class="modal-footer">
-              <button type="button" class="btn" onClick={() => props.onClose()}>Cancel</button>
-              <button type="submit" class="btn btn-primary" disabled={!image().trim()}>Run</button>
+              <button type="button" class="btn" onClick={() => props.onClose()}>{t("Cancel")}</button>
+              <button type="submit" class="btn btn-primary" disabled={!image().trim()}>{t("Run")}</button>
             </div>
           </form>
         </Show>

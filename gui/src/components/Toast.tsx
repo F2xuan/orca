@@ -1,4 +1,5 @@
 import { createSignal, For, Show } from "solid-js";
+import { t } from "../lib/i18n";
 import { logError } from "../lib/activityStore";
 
 export type ToastType = "success" | "error" | "info";
@@ -98,7 +99,7 @@ function CopyToastButton(props: { message: string }) {
   };
 
   return (
-    <button class="toast-copy" onClick={handleCopy} title="Copy error message">
+    <button class="toast-copy" onClick={handleCopy} title={t("Copy error message")}>
       {copied()
         ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
         : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>}

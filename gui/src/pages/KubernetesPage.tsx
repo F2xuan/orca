@@ -1,4 +1,5 @@
 import { createSignal, onMount, onCleanup, For, Index, Show, createEffect } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { showToast } from "../components/Toast";
@@ -422,10 +423,10 @@ export default function KubernetesPage() {
     setK8sRuntime(value);
     try {
       await invoke("k8s_set_runtime", { runtime: value });
-      showToast(`Kubernetes runtime set to ${value}`, "success");
+      showToast(t("Kubernetes runtime set to {value}", { value }), "success");
     } catch (e) {
       setK8sRuntime(prev);
-      showToast(`Failed to set runtime: ${e}`, "error");
+      showToast(t("Failed to set runtime: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -450,7 +451,7 @@ export default function KubernetesPage() {
       setupWs = ws;
 
       ws.onopen = () => {
-        setSetupLog("Starting Kubernetes setup...\n");
+        setSetupLog(t("Starting Kubernetes setup...") + "\n");
       };
 
       ws.onmessage = (event) => {
@@ -483,7 +484,7 @@ export default function KubernetesPage() {
         if (setupWs === ws) setupWs = null;
         (async () => {
           try {
-            setSetupLog("Live streaming not available, using batch mode...\n\n");
+            setSetupLog(t("Live streaming not available, using batch mode...") + "\n\n");
             const result = (await invoke("k8s_enable")) as any;
             const output = typeof result === "string" ? result : (result?.output || JSON.stringify(result, null, 2));
             if (output && output !== "{}" && output !== "null") {
@@ -492,7 +493,7 @@ export default function KubernetesPage() {
               const isInstructions = output.includes("To set up") || output.includes("Lima VM first");
               setSetupSuccess(isReady ? true : isInstructions ? null : true);
             } else {
-              setSetupLog("No output from daemon. Check the Activity tab and daemon log for details.\n");
+              setSetupLog(t("No output from daemon. Check the Activity tab and daemon log for details.") + "\n");
               logError("Failed to enable Kubernetes: no output received from daemon");
               setSetupSuccess(false);
             }
@@ -516,7 +517,7 @@ export default function KubernetesPage() {
           setEnabling(false);
           if (setupSuccess() === null) {
             setSetupSuccess(false);
-            setSetupLog((prev) => prev + "\nConnection lost.\n");
+            setSetupLog((prev) => prev + "\n" + t("Connection lost.") + "\n");
           }
         }
       };
@@ -545,17 +546,17 @@ export default function KubernetesPage() {
     const local = localPort || port;
     try {
       await invoke("k8s_port_forward", { namespace, service, port, localPort: local });
-      showToast(`Port forwarded — accessible at localhost:${local}`, "success");
+      showToast(t("Port forwarded — accessible at localhost:{port}", { port: local }), "success");
       await refreshPortForwards();
     } catch (e) {
-      showToast(`Port forward failed: ${e}`, "error");
+      showToast(t("Port forward failed: {error}", { error: String(e) }), "error");
     }
   };
 
   const stopPortForward = async (namespace: string, service: string, port: number) => {
     try {
       await invoke("k8s_stop_port_forward", { namespace, service, port });
-      showToast(`Port forward stopped`, "info");
+      showToast(t("Port forward stopped"), "info");
       await refreshPortForwards();
     } catch {}
   };
@@ -565,14 +566,14 @@ export default function KubernetesPage() {
 
   const handleStop = async () => {
     setStopping(true);
-    showToast("Stopping Kubernetes cluster...", "info");
+    showToast(t("Stopping Kubernetes cluster..."), "info");
     try {
       await invoke("k8s_disable");
-      showToast("Kubernetes cluster stopped", "success");
+      showToast(t("Kubernetes cluster stopped"), "success");
       await refreshStatus();
     } catch (e) {
       logError(`Failed to stop Kubernetes: ${e}`);
-      showToast(`Failed to stop: ${e}`, "error");
+      showToast(t("Failed to stop: {error}", { error: String(e) }), "error");
     }
     setStopping(false);
   };
@@ -581,37 +582,37 @@ export default function KubernetesPage() {
     try {
       setEnabling(true);
       await invoke("k8s_start");
-      showToast("Kubernetes cluster started", "success");
+      showToast(t("Kubernetes cluster started"), "success");
       await refreshStatus();
     } catch (e) {
       logError(`Failed to start Kubernetes: ${e}`);
-      showToast(`Failed to start: ${e}`, "error");
+      showToast(t("Failed to start: {error}", { error: String(e) }), "error");
     } finally {
       setEnabling(false);
     }
   };
 
   const handleReset = async () => {
-    if (!await confirmDanger("Reset Kubernetes", "This will uninstall k3s and delete ALL workloads, data, and configuration. A fresh k3s will be reinstalled.")) return;
+    if (!await confirmDanger(t("Reset Kubernetes"), t("This will uninstall k3s and delete ALL workloads, data, and configuration. A fresh k3s will be reinstalled."))) return;
     try {
       await invoke("k8s_reset");
-      showToast("Kubernetes cluster reset", "success");
+      showToast(t("Kubernetes cluster reset"), "success");
       await refreshStatus();
     } catch (e) {
       logError(`Failed to reset Kubernetes cluster: ${e}`);
-      showToast(`Failed to reset: ${e}`, "error");
+      showToast(t("Failed to reset: {error}", { error: String(e) }), "error");
     }
   };
 
   const handleDeletePod = async (namespace: string, name: string) => {
-    if (!await confirmDanger("Delete Pod", `Delete pod '${name}'?`)) return;
+    if (!await confirmDanger(t("Delete Pod"), t("Delete pod '{name}'?", { name }))) return;
     try {
       await invoke("k8s_delete_pod", { namespace, name });
-      showToast(`Pod ${name} deleted`, "success");
+      showToast(t("Pod {name} deleted", { name }), "success");
       await refreshWorkloads();
     } catch (e) {
       logError(`Failed to delete pod: ${e}`, `Pod "${name}" in namespace "${namespace}"`);
-      showToast(`Failed to delete pod: ${e}`, "error");
+      showToast(t("Failed to delete pod: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -626,36 +627,36 @@ export default function KubernetesPage() {
     try {
       const command = tab() === "statefulsets" ? "k8s_scale_statefulset" : "k8s_scale_deployment";
       await invoke(command, { namespace: target.namespace, name: target.name, replicas: scaleValue() });
-      showToast(`Scaled ${target.name} to ${scaleValue()} replicas`, "success");
+      showToast(t("Scaled {name} to {count} replicas", { name: target.name, count: scaleValue() }), "success");
       setScaleTarget(null);
       await refreshWorkloads();
     } catch (e) {
       const kind = tab() === "statefulsets" ? "StatefulSet" : "Deployment";
       logError(`Failed to scale ${kind}: ${e}`, `${kind} "${target.name}" in "${target.namespace}"`);
-      showToast(`Failed to scale: ${e}`, "error");
+      showToast(t("Failed to scale: {error}", { error: String(e) }), "error");
     }
   };
 
   const handleRestart = async (namespace: string, name: string) => {
     try {
       await invoke("k8s_restart_deployment", { namespace, name });
-      showToast(`Deployment ${name} restarting`, "success");
+      showToast(t("Deployment {name} restarting", { name }), "success");
       await refreshWorkloads();
     } catch (e) {
       logError(`Failed to restart deployment: ${e}`, `Deployment "${name}" in "${namespace}"`);
-      showToast(`Failed to restart: ${e}`, "error");
+      showToast(t("Failed to restart: {error}", { error: String(e) }), "error");
     }
   };
 
   const handleDeletePvc = async (namespace: string, name: string) => {
-    if (!await confirmDanger("Delete PVC", `Delete PVC '${name}'? Associated data may be lost.`)) return;
+    if (!await confirmDanger(t("Delete PVC"), t("Delete PVC '{name}'? Associated data may be lost.", { name }))) return;
     try {
       await invoke("k8s_delete_pvc", { namespace, name });
-      showToast(`PVC ${name} deleted`, "success");
+      showToast(t("PVC {name} deleted", { name }), "success");
       await refreshWorkloads();
     } catch (e) {
       logError(`Failed to delete PVC: ${e}`, `PVC "${name}" in namespace "${namespace}"`);
-      showToast(`Failed to delete PVC: ${e}`, "error");
+      showToast(t("Failed to delete PVC: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -683,54 +684,54 @@ export default function KubernetesPage() {
 
   const handleSaveSecret = async () => {
     const name = secretDialogName().trim();
-    if (!name) { showToast("Secret name is required", "error"); return; }
+    if (!name) { showToast(t("Secret name is required"), "error"); return; }
     const entries = secretDialogEntries().filter(e => e.key.trim());
-    if (entries.length === 0) { showToast("At least one key-value entry is required", "error"); return; }
+    if (entries.length === 0) { showToast(t("At least one key-value entry is required"), "error"); return; }
     const data: Record<string, string> = {};
     for (const e of entries) data[e.key.trim()] = e.value;
     setSecretDialogSaving(true);
     try {
       if (secretDialogMode() === "create") {
         await invoke("k8s_create_secret", { namespace: selectedNs(), name, data, secretType: secretDialogType() });
-        showToast(`Secret '${name}' created`, "success");
+        showToast(t("Secret '{name}' created", { name }), "success");
       } else {
         await invoke("k8s_update_secret", { namespace: selectedNs(), name, data });
-        showToast(`Secret '${name}' updated`, "success");
+        showToast(t("Secret '{name}' updated", { name }), "success");
       }
       setSecretDialogOpen(false);
       await refreshWorkloads();
     } catch (e) {
-      showToast(`Failed to save secret: ${e}`, "error");
+      showToast(t("Failed to save secret: {error}", { error: String(e) }), "error");
     } finally {
       setSecretDialogSaving(false);
     }
   };
 
   const handleDeleteSecret = async (namespace: string, name: string) => {
-    if (!await confirmDanger("Delete Secret", `Delete secret '${name}'? This cannot be undone.`)) return;
+    if (!await confirmDanger(t("Delete Secret"), t("Delete secret '{name}'? This cannot be undone.", { name }))) return;
     try {
       await invoke("k8s_delete_secret", { namespace, name });
-      showToast(`Secret '${name}' deleted`, "success");
+      showToast(t("Secret '{name}' deleted", { name }), "success");
       await refreshWorkloads();
     } catch (e) {
       logError(`Failed to delete secret: ${e}`, `Secret "${name}" in namespace "${namespace}"`);
-      showToast(`Failed to delete secret: ${e}`, "error");
+      showToast(t("Failed to delete secret: {error}", { error: String(e) }), "error");
     }
   };
 
   // --- PVC Create handler ---
   const handleCreatePvc = async () => {
     const name = pvcName().trim();
-    if (!name) { showToast("PVC name is required", "error"); return; }
+    if (!name) { showToast(t("PVC name is required"), "error"); return; }
     const storageClass = pvcStorageClass().trim();
-    if (!storageClass) { showToast("Storage class is required", "error"); return; }
+    if (!storageClass) { showToast(t("Storage class is required"), "error"); return; }
     const size = `${pvcSizeValue()}${pvcSizeUnit()}`;
     const accessModes = Array.from(pvcAccessModes());
-    if (accessModes.length === 0) { showToast("Select at least one access mode", "error"); return; }
+    if (accessModes.length === 0) { showToast(t("Select at least one access mode"), "error"); return; }
     setPvcCreating(true);
     try {
       await invoke("k8s_create_pvc", { namespace: selectedNs(), name, storageClass, size, accessModes });
-      showToast(`PVC '${name}' created`, "success");
+      showToast(t("PVC '{name}' created", { name }), "success");
       setPvcDialogOpen(false);
       setPvcName("");
       setPvcStorageClass("");
@@ -739,7 +740,7 @@ export default function KubernetesPage() {
       setPvcAccessModes(new Set(["ReadWriteOnce"]));
       await refreshWorkloads();
     } catch (e) {
-      showToast(`Failed to create PVC: ${e}`, "error");
+      showToast(t("Failed to create PVC: {error}", { error: String(e) }), "error");
     } finally {
       setPvcCreating(false);
     }
@@ -760,7 +761,7 @@ export default function KubernetesPage() {
       setLogLines(lines);
     } catch (e) {
       logError(`Failed to fetch pod logs: ${e}`, `Pod "${name}" in namespace "${namespace}"`);
-      showToast(`Failed to get logs: ${e}`, "error");
+      showToast(t("Failed to get logs: {error}", { error: String(e) }), "error");
       setLogPod(null);
     }
   };
@@ -773,7 +774,7 @@ export default function KubernetesPage() {
       const history = (await invoke("k8s_rollout_history", { namespace, name })) as RolloutRevision[];
       setRollbackHistory(history);
     } catch (e) {
-      showToast(`Failed to get rollout history: ${e}`, "error");
+      showToast(t("Failed to get rollout history: {error}", { error: String(e) }), "error");
       setRollbackDep(null);
     } finally {
       setRollbackLoading(false);
@@ -783,26 +784,26 @@ export default function KubernetesPage() {
   const handleRollback = async (revision: number) => {
     const dep = rollbackDep();
     if (!dep) return;
-    if (!await confirmDanger("Rollback Deployment", `Rollback '${dep.name}' to revision ${revision}?`)) return;
+    if (!await confirmDanger(t("Rollback Deployment"), t("Rollback '{name}' to revision {revision}?", { name: dep.name, revision }))) return;
     try {
       await invoke("k8s_rollout_undo", { namespace: dep.namespace, name: dep.name, revision });
-      showToast(`Rolling back ${dep.name} to revision ${revision}`, "success");
+      showToast(t("Rolling back {name} to revision {revision}", { name: dep.name, revision }), "success");
       setRollbackDep(null);
       await refreshWorkloads();
     } catch (e) {
-      showToast(`Rollback failed: ${e}`, "error");
+      showToast(t("Rollback failed: {error}", { error: String(e) }), "error");
     }
   };
 
   // Feature 4: Helm uninstall handler
   const handleHelmUninstall = async (name: string, namespace: string) => {
-    if (!await confirmDanger("Uninstall Helm Release", `Uninstall '${name}' from namespace '${namespace}'?`)) return;
+    if (!await confirmDanger(t("Uninstall Helm Release"), t("Uninstall '{name}' from namespace '{namespace}'?", { name, namespace }))) return;
     try {
       await invoke("k8s_helm_uninstall", { name, namespace });
-      showToast(`Helm release '${name}' uninstalled`, "success");
+      showToast(t("Helm release '{name}' uninstalled", { name }), "success");
       await refreshWorkloads();
     } catch (e) {
-      showToast(`Helm uninstall failed: ${e}`, "error");
+      showToast(t("Helm uninstall failed: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -810,7 +811,7 @@ export default function KubernetesPage() {
     const relName = helmReleaseName().trim();
     const chart = helmChartName().trim();
     if (!relName || !chart) {
-      showToast("Release name and chart are required", "error");
+      showToast(t("Release name and chart are required"), "error");
       return;
     }
     setHelmInstalling(true);
@@ -824,14 +825,14 @@ export default function KubernetesPage() {
         namespace: helmInstallNs(),
         setValues: setVals.length > 0 ? setVals : null,
       });
-      showToast(`Helm release '${relName}' installed`, "success");
+      showToast(t("Helm release '{name}' installed", { name: relName }), "success");
       setHelmInstallOpen(false);
       setHelmReleaseName("");
       setHelmChartName("");
       setHelmSetValues([]);
       await refreshWorkloads();
     } catch (e) {
-      showToast(`Helm install failed: ${e}`, "error");
+      showToast(t("Helm install failed: {error}", { error: String(e) }), "error");
     } finally {
       setHelmInstalling(false);
     }
@@ -873,7 +874,7 @@ export default function KubernetesPage() {
     const pathType = ingressPathType();
 
     if (!name || !hostname || !svcName || !svcPort) {
-      showToast("Name, hostname, service, and port are required", "error");
+      showToast(t("Name, hostname, service, and port are required"), "error");
       return;
     }
 
@@ -884,34 +885,34 @@ export default function KubernetesPage() {
     const dns1123 = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
     const dns1123Label = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
     if (!dns1123Label.test(name)) {
-      showToast("Ingress name must be a DNS-1123 label (lowercase letters, digits, hyphens)", "error");
+      showToast(t("Ingress name must be a DNS-1123 label (lowercase letters, digits, hyphens)"), "error");
       return;
     }
     if (!dns1123.test(hostname)) {
-      showToast("Hostname must be a DNS-1123 subdomain", "error");
+      showToast(t("Hostname must be a DNS-1123 subdomain"), "error");
       return;
     }
     if (!dns1123Label.test(svcName)) {
-      showToast("Service name must be a DNS-1123 label", "error");
+      showToast(t("Service name must be a DNS-1123 label"), "error");
       return;
     }
     const ns = selectedNs();
     if (!dns1123Label.test(ns)) {
-      showToast(`Invalid namespace: ${ns}`, "error");
+      showToast(t("Invalid namespace: {ns}", { ns }), "error");
       return;
     }
     if (!Number.isInteger(svcPort) || svcPort < 1 || svcPort > 65535) {
-      showToast("Service port must be 1-65535", "error");
+      showToast(t("Service port must be 1-65535"), "error");
       return;
     }
     if (pathType !== "Prefix" && pathType !== "Exact" && pathType !== "ImplementationSpecific") {
-      showToast(`Invalid pathType: ${pathType}`, "error");
+      showToast(t("Invalid pathType: {pathType}", { pathType }), "error");
       return;
     }
     // URL paths: allow a reasonable set of characters. Reject anything
     // containing whitespace (which could break YAML) or control bytes.
     if (!/^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/]*$/.test(path)) {
-      showToast("Path must start with / and contain only URL-safe characters", "error");
+      showToast(t("Path must start with / and contain only URL-safe characters"), "error");
       return;
     }
 
@@ -944,11 +945,11 @@ spec:
     setIngressCreating(true);
     try {
       await invoke("k8s_apply_yaml", { yaml });
-      showToast(`Ingress '${name}' created`, "success");
+      showToast(t("Ingress '{name}' created", { name }), "success");
       setCreateIngressOpen(false);
       await refreshWorkloads();
     } catch (e) {
-      showToast(`Failed to create ingress: ${e}`, "error");
+      showToast(t("Failed to create ingress: {error}", { error: String(e) }), "error");
     } finally {
       setIngressCreating(false);
     }
@@ -965,7 +966,7 @@ spec:
     // Windows / no direct URL: port-forward traefik service port 9000, then open
     const tSvc = traefikService();
     if (!tSvc) {
-      showToast("Traefik service not found in kube-system", "error");
+      showToast(t("Traefik service not found in kube-system"), "error");
       return;
     }
     // Check if already forwarded
@@ -981,7 +982,7 @@ spec:
       await new Promise(r => setTimeout(r, 1500));
       await shellOpen("http://localhost:9000/dashboard/");
     } catch (e) {
-      showToast(`Failed to forward Traefik dashboard: ${e}`, "error");
+      showToast(t("Failed to forward Traefik dashboard: {error}", { error: String(e) }), "error");
     } finally {
       setTraefikForwarding(false);
     }
@@ -991,23 +992,23 @@ spec:
     try {
       const yaml = await invoke("k8s_get_yaml", { kind, name, namespace }) as string;
       if (!yaml || yaml.trim().length === 0) {
-        showToast(`No YAML returned for ${kind}/${name}`, "error");
+        showToast(t("No YAML returned for {kind}/{name}", { kind, name }), "error");
         return;
       }
       setYamlResource({ kind, name, namespace, yaml });
     } catch (e) {
-      showToast(`Failed to get YAML for ${kind}/${name}: ${e}`, "error");
+      showToast(t("Failed to get YAML for {kind}/{name}: {error}", { kind, name, error: String(e) }), "error");
     }
   };
 
   const applyYaml = async (yaml: string) => {
     try {
       await invoke("k8s_apply_yaml", { yaml });
-      showToast("YAML applied successfully", "success");
+      showToast(t("YAML applied successfully"), "success");
       setYamlResource(null);
       refreshWorkloads();
     } catch (e) {
-      showToast(`Failed to apply: ${e}`, "error");
+      showToast(t("Failed to apply: {error}", { error: String(e) }), "error");
       throw e;
     }
   };
@@ -1015,11 +1016,11 @@ spec:
   const handleDeployYaml = async (yaml: string) => {
     try {
       await invoke("k8s_apply_yaml", { yaml });
-      showToast("YAML deployed successfully", "success");
+      showToast(t("YAML deployed successfully"), "success");
       setDeployYamlOpen(false);
       refreshWorkloads();
     } catch (e) {
-      showToast(`Failed to deploy: ${e}`, "error");
+      showToast(t("Failed to deploy: {error}", { error: String(e) }), "error");
       throw e;
     }
   };
@@ -1029,28 +1030,28 @@ spec:
     if (!name) return;
     try {
       await invoke("k8s_create_namespace", { name });
-      showToast(`Namespace '${name}' created`, "success");
+      showToast(t("Namespace '{name}' created", { name }), "success");
       setCreateNsOpen(false);
       setNewNsName("");
       await refreshStatus();
       setSelectedNs(name);
     } catch (e) {
       logError(`Failed to create namespace: ${e}`);
-      showToast(`Failed to create namespace: ${e}`, "error");
+      showToast(t("Failed to create namespace: {error}", { error: String(e) }), "error");
     }
   };
 
   const handleDeleteNamespace = async () => {
     const ns = selectedNs();
-    if (!await confirmDanger("Delete Namespace", `Delete namespace '${ns}'? This will destroy ALL resources within it.`)) return;
+    if (!await confirmDanger(t("Delete Namespace"), t("Delete namespace '{ns}'? This will destroy ALL resources within it.", { ns }))) return;
     try {
       await invoke("k8s_delete_namespace", { name: ns });
-      showToast(`Namespace '${ns}' deleted`, "success");
+      showToast(t("Namespace '{ns}' deleted", { ns }), "success");
       setSelectedNs("default");
       await refreshStatus();
     } catch (e) {
       logError(`Failed to delete namespace: ${e}`);
-      showToast(`Failed to delete namespace: ${e}`, "error");
+      showToast(t("Failed to delete namespace: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -1103,7 +1104,7 @@ spec:
   return (
     <div>
       <div class="page-header">
-        <h1 class="page-title">Kubernetes</h1>
+        <h1 class="page-title">{t("Kubernetes")}</h1>
       </div>
 
       {/* Hero Card: Not installed / Installed but stopped / Enabling */}
@@ -1117,49 +1118,49 @@ spec:
               </div>
               <div class="hero-subtitle" style={{ "margin-bottom": "0" }}>
                 {status()?.installed
-                  ? "Starting k3s. This may take a moment."
-                  : "Installing k3s and configuring Traefik ingress. This may take a minute."}
+                  ? t("Starting k3s. This may take a moment.")
+                  : t("Installing k3s and configuring Traefik ingress. This may take a minute.")}
               </div>
             </div>
           </Show>
           <Show when={!enabling()}>
             <div style={{ position: "relative" }}>
               <div style={{ "font-size": "48px", "margin-bottom": "16px", opacity: "0.6" }}>{"\u2638"}</div>
-              <div class="hero-title">Kubernetes</div>
+              <div class="hero-title">{t("Kubernetes")}</div>
               <Show when={status()?.installed} fallback={
                 <>
                   <div class="hero-subtitle">
-                    Run a local Kubernetes cluster powered by k3s with Traefik ingress.
-                    Deploy, scale, and manage containerized workloads with a production-grade orchestrator.
+                    {t("Run a local Kubernetes cluster powered by k3s with Traefik ingress.")}
+                    {t("Deploy, scale, and manage containerized workloads with a production-grade orchestrator.")}
                   </div>
                   <div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "center", "margin-bottom": "12px", "font-size": "13px" }}>
-                    <label for="k8s-runtime">Container runtime:</label>
+                    <label for="k8s-runtime">{t("Container runtime:")}</label>
                     <select
                       id="k8s-runtime"
                       value={k8sRuntime()}
                       onChange={(e) => handleRuntimeChange(e.currentTarget.value)}
                     >
-                      <option value="docker">Docker — matches Docker Desktop (no image push/import)</option>
-                      <option value="containerd">containerd — upstream Kubernetes default</option>
+                      <option value="docker">{t("Docker — matches Docker Desktop (no image push/import)")}</option>
+                      <option value="containerd">{t("containerd — upstream Kubernetes default")}</option>
                     </select>
                   </div>
                   <button
                     class="btn btn-primary btn-hero"
                     onClick={handleEnable}
                   >
-                    Enable Kubernetes
+                    {t("Enable Kubernetes")}
                   </button>
                 </>
               }>
                 <div class="hero-subtitle">
-                  The Kubernetes cluster is installed but not running.
+                  {t("The Kubernetes cluster is installed but not running.")}
                 </div>
                 <div style={{ display: "flex", gap: "10px", "justify-content": "center", "margin-top": "8px" }}>
                   <button
                     class="btn btn-primary btn-hero"
                     onClick={handleStart}
                   >
-                    Start Kubernetes
+                    {t("Start Kubernetes")}
                   </button>
                   <button
                     class="btn btn-hero"
@@ -1172,7 +1173,7 @@ spec:
                     }}
                     onClick={handleReset}
                   >
-                    Reset Kubernetes
+                    {t("Reset Kubernetes")}
                   </button>
                 </div>
               </Show>
@@ -1217,7 +1218,7 @@ spec:
               "box-shadow": stopping() ? "0 0 6px #d2992244" : "0 0 6px #3fb95044",
             }} />
             <span style={{ "font-weight": "600", "font-size": "13px" }}>
-              {stopping() ? "Stopping..." : (status()?.version || "Kubernetes")}
+              {stopping() ? t("Stopping...") : (status()?.version || "Kubernetes")}
             </span>
           </div>
           <span class="status-bar-separator" />
@@ -1230,7 +1231,7 @@ spec:
           </span>
           <Show when={traefikIntegrationMode() && traefikService()}>
             <span class="status-bar-separator" />
-            <span style={{ "font-size": "11px", color: "#8b949e" }} title="Configured in Gateway page">
+            <span style={{ "font-size": "11px", color: "#8b949e" }} title={t("Configured in Gateway page")}>
               {traefikIntegrationMode() === "separate_ports"
                 ? "Traefik: Separate ports"
                 : traefikIntegrationMode() === "gateway_proxies_traefik"
@@ -1246,14 +1247,14 @@ spec:
                 onClick={openTraefikDashboard}
                 disabled={traefikForwarding()}
               >
-                {traefikForwarding() ? "Connecting..." : "Traefik Dashboard"}
+                {traefikForwarding() ? t("Connecting...") : t("Traefik Dashboard")}
               </button>
             </Show>
             <div class="dropdown-wrapper">
               <button
                 class="action-icon"
                 onClick={() => setK8sMenuOpen(!k8sMenuOpen())}
-                title="More actions"
+                title={t("More actions")}
                 style={{ color: "#8b949e" }}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/></svg>
@@ -1261,16 +1262,16 @@ spec:
               <Show when={k8sMenuOpen()}>
                 <div class="dropdown-menu" style={{ "min-width": "200px" }} onClick={() => setK8sMenuOpen(false)}>
                   <button class="dropdown-item" onClick={() => { refreshStatus(); refreshWorkloads(); }}>
-                    {"\u21BB"} Refresh
+                    {"\u21BB"} {t("Refresh")}
                   </button>
                   <Show when={traefikService()}>
                     <button class="dropdown-item" onClick={() => setTraefikInfoOpen(true)}>
-                      {"\u29BF"} Traefik Info
+                      {"\u29BF"} {t("Traefik Info")}
                     </button>
                   </Show>
                   <div class="dropdown-divider" />
                   <button class="dropdown-item dropdown-item-danger" onClick={handleReset}>
-                    {"\u26A0"} Reset Cluster
+                    {"\u26A0"} {t("Reset Cluster")}
                   </button>
                   <button class="dropdown-item dropdown-item-danger" onClick={handleStop} disabled={stopping()}>
                     {stopping() ? "Stopping..." : "\u25A0 Stop Kubernetes"}
@@ -1287,7 +1288,7 @@ spec:
         <div class="hero-card">
           <div class="hero-spinner">
             <Spinner />
-            <div style={{ color: "#8b949e", "font-size": "14px" }}>Loading cluster status...</div>
+            <div style={{ color: "#8b949e", "font-size": "14px" }}>{t("Loading cluster status...")}</div>
           </div>
         </div>
       </Show>
@@ -1301,7 +1302,7 @@ spec:
           gap: "16px",
           "margin-bottom": "0",
         }}>
-          <label style={{ color: "#8b949e", "font-size": "13px" }}>Namespace:</label>
+          <label style={{ color: "#8b949e", "font-size": "13px" }}>{t("Namespace:")}</label>
           <Dropdown
             value={selectedNs()}
             options={namespaces().map((ns) => ({ value: ns.name, label: ns.name }))}
@@ -1310,7 +1311,7 @@ spec:
           />
           <button
             class="action-icon"
-            title="Create namespace"
+            title={t("Create namespace")}
             onClick={() => { setNewNsName(""); setCreateNsOpen(true); }}
             style={{ color: "#3fb950", "font-size": "16px" }}
           >
@@ -1319,7 +1320,7 @@ spec:
           <Show when={!systemNamespaces.has(selectedNs())}>
             <button
               class="action-icon action-icon-delete"
-              title="Delete namespace"
+              title={t("Delete namespace")}
               onClick={handleDeleteNamespace}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -1328,11 +1329,11 @@ spec:
           <div style={{ "margin-left": "auto" }}>
             <button
               class="btn btn-sm btn-primary"
-              title="Deploy from YAML"
+              title={t("Deploy from YAML")}
               onClick={() => setDeployYamlOpen(true)}
               style={{ "font-size": "12px", padding: "4px 12px" }}
             >
-              + Deploy
+              {t("+ Deploy")}
             </button>
           </div>
         </div>
@@ -1340,12 +1341,12 @@ spec:
         {/* Tab bar */}
         <div class="tab-bar" style={{ "margin-top": "16px" }}>
           <For each={tabs}>
-            {(t) => (
+            {(tb) => (
               <button
-                class={`tab-item ${tab() === t.id ? "active" : ""}`}
-                onClick={() => setTab(t.id)}
+                class={`tab-item ${tab() === tb.id ? "active" : ""}`}
+                onClick={() => setTab(tb.id)}
               >
-                {t.label}
+                {t(tb.label)}
               </button>
             )}
           </For>
@@ -1364,23 +1365,23 @@ spec:
             when={pods().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.pods.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.pods.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.pods.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.pods.desc)}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Ready</th>
-                  <th>Status</th>
-                  <th>CPU</th>
-                  <th>Memory</th>
-                  <th>Restarts</th>
-                  <th>Age</th>
-                  <th>IP</th>
-                  <th>Actions</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Ready")}</th>
+                  <th>{t("Status")}</th>
+                  <th>{t("CPU")}</th>
+                  <th>{t("Memory")}</th>
+                  <th>{t("Restarts")}</th>
+                  <th>{t("Age")}</th>
+                  <th>{t("IP")}</th>
+                  <th>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1412,35 +1413,35 @@ spec:
                         <div style={{ display: "flex", gap: "4px" }}>
                           <button
                             class="action-icon"
-                            title="View logs"
+                            title={t("View logs")}
                             onClick={() => handleViewLogs(pod.namespace, pod.name)}
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
                           </button>
                           <button
                             class="action-icon action-icon-restart"
-                            title="Restart pod"
+                            title={t("Restart pod")}
                             onClick={() => handleDeletePod(pod.namespace, pod.name)}
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                           </button>
                           <button
                             class="action-icon action-icon-delete"
-                            title="Delete pod"
+                            title={t("Delete pod")}
                             onClick={() => handleDeletePod(pod.namespace, pod.name)}
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                           </button>
                           <button
                             class="action-icon"
-                            title="View/Edit YAML"
+                            title={t("View/Edit YAML")}
                             onClick={() => viewYaml("pod", pod.name, pod.namespace)}
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                           </button>
                           <button
                             class="action-icon"
-                            title="Terminal"
+                            title={t("Terminal")}
                             onClick={() => setShellPod({ name: pod.name, namespace: pod.namespace })}
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
@@ -1462,19 +1463,19 @@ spec:
             when={deployments().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.deployments.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.deployments.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.deployments.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.deployments.desc)}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Ready</th>
-                  <th>Images</th>
-                  <th>Age</th>
-                  <th>Actions</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Ready")}</th>
+                  <th>{t("Images")}</th>
+                  <th>{t("Age")}</th>
+                  <th>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1517,21 +1518,21 @@ spec:
                           </button>
                           <button
                             class="action-icon"
-                            title="Restart deployment"
+                            title={t("Restart deployment")}
                             onClick={() => handleRestart(dep.namespace, dep.name)}
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
                           </button>
                           <button
                             class="action-icon"
-                            title="Rollout history"
+                            title={t("Rollout history")}
                             onClick={() => handleShowHistory(dep.namespace, dep.name)}
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                           </button>
                           <button
                             class="action-icon"
-                            title="View/Edit YAML"
+                            title={t("View/Edit YAML")}
                             onClick={() => viewYaml("deployment", dep.name, dep.namespace)}
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
@@ -1548,7 +1549,7 @@ spec:
           {/* Autoscalers sub-section */}
           <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", "margin-top": "24px", "margin-bottom": "12px" }}>
             <h3 style={{ color: "#e6edf3", "font-size": "14px", margin: "0" }}>
-              Autoscalers
+              {t("Autoscalers")}
             </h3>
             <button class="btn btn-sm btn-primary" onClick={() => {
               setHpaName("");
@@ -1558,30 +1559,30 @@ spec:
               setHpaCpuTarget("50");
               setHpaDialogOpen(true);
             }}>
-              + Create HPA
+              {t("+ Create HPA")}
             </button>
           </div>
           <Show
             when={hpas().length > 0}
             fallback={
               <div class="empty-state-tab" style={{ padding: "32px 20px" }}>
-                <div class="empty-state-tab-title">No autoscalers in this namespace</div>
-                <div class="empty-state-tab-desc">Create an HPA to automatically scale deployments based on CPU usage.</div>
+                <div class="empty-state-tab-title">{t("No autoscalers in this namespace")}</div>
+                <div class="empty-state-tab-desc">{t("Create an HPA to automatically scale deployments based on CPU usage.")}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Reference</th>
-                  <th>Min</th>
-                  <th>Max</th>
-                  <th>Current</th>
-                  <th>Target CPU</th>
-                  <th>Current CPU</th>
-                  <th>Age</th>
-                  <th>Actions</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Reference")}</th>
+                  <th>{t("Min")}</th>
+                  <th>{t("Max")}</th>
+                  <th>{t("Current")}</th>
+                  <th>{t("Target CPU")}</th>
+                  <th>{t("Current CPU")}</th>
+                  <th>{t("Age")}</th>
+                  <th>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1600,23 +1601,23 @@ spec:
                         <div style={{ display: "flex", gap: "4px", "align-items": "center" }}>
                           <button
                             class="action-icon"
-                            title="View YAML"
+                            title={t("View YAML")}
                             onClick={() => viewYaml("hpa", hpa.name, hpa.namespace)}
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                           </button>
                           <button
                             class="action-icon action-icon-delete"
-                            title="Delete HPA"
+                            title={t("Delete HPA")}
                             onClick={async () => {
-                              const ok = await confirmDanger(`Delete HPA "${hpa.name}"?`, "This will remove the autoscaler. The deployment will keep its current replica count.");
+                              const ok = await confirmDanger(t("Delete HPA \"{name}\"?", { name: hpa.name }), t("This will remove the autoscaler. The deployment will keep its current replica count."));
                               if (!ok) return;
                               try {
                                 await invoke("k8s_delete_hpa", { namespace: hpa.namespace, name: hpa.name });
-                                showToast(`Deleted HPA ${hpa.name}`, "success");
+                                showToast(t("Deleted HPA {name}", { name: hpa.name }), "success");
                                 refreshWorkloads();
                               } catch (e) {
-                                showToast(`Failed to delete HPA: ${e}`, "error");
+                                showToast(t("Failed to delete HPA: {error}", { error: String(e) }), "error");
                               }
                             }}
                           >
@@ -1638,22 +1639,22 @@ spec:
             when={daemonSets().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.daemonsets.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.daemonsets.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.daemonsets.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.daemonsets.desc)}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Desired</th>
-                  <th>Current</th>
-                  <th>Ready</th>
-                  <th>Node Selector</th>
-                  <th>Images</th>
-                  <th>Age</th>
-                  <th>Actions</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Desired")}</th>
+                  <th>{t("Current")}</th>
+                  <th>{t("Ready")}</th>
+                  <th>{t("Node Selector")}</th>
+                  <th>{t("Images")}</th>
+                  <th>{t("Age")}</th>
+                  <th>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1693,23 +1694,23 @@ spec:
                         <div style={{ display: "flex", gap: "4px", "align-items": "center" }}>
                           <button
                             class="action-icon"
-                            title="View/Edit YAML"
+                            title={t("View/Edit YAML")}
                             onClick={() => viewYaml("daemonset", ds.name, ds.namespace)}
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                           </button>
                           <button
                             class="action-icon action-icon-delete"
-                            title="Delete DaemonSet"
+                            title={t("Delete DaemonSet")}
                             onClick={async () => {
-                              if (!await confirmDanger(`Delete DaemonSet "${ds.name}"?`, "This will remove the DaemonSet and its pods.")) return;
+                              if (!await confirmDanger(t("Delete DaemonSet \"{name}\"?", { name: ds.name }), t("This will remove the DaemonSet and its pods."))) return;
                               try {
                                 await invoke("k8s_delete_daemonset", { namespace: ds.namespace, name: ds.name });
-                                showToast(`DaemonSet ${ds.name} deleted`, "success");
+                                showToast(t("DaemonSet {name} deleted", { name: ds.name }), "success");
                                 logInfo(`Deleted DaemonSet ${ds.name}`);
                                 refreshWorkloads();
                               } catch (e) {
-                                showToast(`Delete failed: ${e}`, "error");
+                                showToast(t("Delete failed: {error}", { error: String(e) }), "error");
                               }
                             }}
                           >
@@ -1731,20 +1732,20 @@ spec:
             when={statefulSets().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.statefulsets.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.statefulsets.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.statefulsets.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.statefulsets.desc)}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Ready</th>
-                  <th>Replicas</th>
-                  <th>Images</th>
-                  <th>Age</th>
-                  <th>Actions</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Ready")}</th>
+                  <th>{t("Replicas")}</th>
+                  <th>{t("Images")}</th>
+                  <th>{t("Age")}</th>
+                  <th>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1789,15 +1790,15 @@ spec:
                             </button>
                             <button
                               class="action-icon"
-                              title="Restart StatefulSet"
+                              title={t("Restart StatefulSet")}
                               onClick={async () => {
                                 try {
                                   await invoke("k8s_restart_statefulset", { namespace: sts.namespace, name: sts.name });
-                                  showToast(`StatefulSet ${sts.name} restarting`, "success");
+                                  showToast(t("StatefulSet {name} restarting", { name: sts.name }), "success");
                                   await refreshWorkloads();
                                 } catch (e) {
                                   logError(`Failed to restart StatefulSet: ${e}`, `StatefulSet "${sts.name}" in "${sts.namespace}"`);
-                                  showToast(`Failed to restart: ${e}`, "error");
+                                  showToast(t("Failed to restart: {error}", { error: String(e) }), "error");
                                 }
                               }}
                             >
@@ -1805,23 +1806,23 @@ spec:
                             </button>
                             <button
                               class="action-icon"
-                              title="View/Edit YAML"
+                              title={t("View/Edit YAML")}
                               onClick={() => viewYaml("statefulset", sts.name, sts.namespace)}
                             >
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                             </button>
                             <button
                               class="action-icon action-icon-delete"
-                              title="Delete StatefulSet"
+                              title={t("Delete StatefulSet")}
                               onClick={async () => {
                                 if (!await confirmDanger(`Delete StatefulSet "${sts.name}"?`, "This will remove the StatefulSet and its pods.")) return;
                                 try {
                                   await invoke("k8s_delete_statefulset", { namespace: sts.namespace, name: sts.name });
-                                  showToast(`StatefulSet ${sts.name} deleted`, "success");
+                                  showToast(t("StatefulSet {name} deleted", { name: sts.name }), "success");
                                   logInfo(`Deleted StatefulSet ${sts.name}`);
                                   refreshWorkloads();
                                 } catch (e) {
-                                  showToast(`Delete failed: ${e}`, "error");
+                                  showToast(t("Delete failed: {error}", { error: String(e) }), "error");
                                 }
                               }}
                             >
@@ -1844,22 +1845,22 @@ spec:
             when={replicaSets().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.replicasets.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.replicasets.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.replicasets.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.replicasets.desc)}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Desired</th>
-                  <th>Current</th>
-                  <th>Ready</th>
-                  <th>Owner</th>
-                  <th>Images</th>
-                  <th>Age</th>
-                  <th>Actions</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Desired")}</th>
+                  <th>{t("Current")}</th>
+                  <th>{t("Ready")}</th>
+                  <th>{t("Owner")}</th>
+                  <th>{t("Images")}</th>
+                  <th>{t("Age")}</th>
+                  <th>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1899,23 +1900,23 @@ spec:
                         <div style={{ display: "flex", gap: "4px", "align-items": "center" }}>
                           <button
                             class="action-icon"
-                            title="View/Edit YAML"
+                            title={t("View/Edit YAML")}
                             onClick={() => viewYaml("replicaset", rs.name, rs.namespace)}
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                           </button>
                           <button
                             class="action-icon action-icon-delete"
-                            title="Delete ReplicaSet"
+                            title={t("Delete ReplicaSet")}
                             onClick={async () => {
                               if (!await confirmDanger(`Delete ReplicaSet "${rs.name}"?`, "This will remove the ReplicaSet and its pods.")) return;
                               try {
                                 await invoke("k8s_delete_replicaset", { namespace: rs.namespace, name: rs.name });
-                                showToast(`ReplicaSet ${rs.name} deleted`, "success");
+                                showToast(t("ReplicaSet {name} deleted", { name: rs.name }), "success");
                                 logInfo(`Deleted ReplicaSet ${rs.name}`);
                                 refreshWorkloads();
                               } catch (e) {
-                                showToast(`Delete failed: ${e}`, "error");
+                                showToast(t("Delete failed: {error}", { error: String(e) }), "error");
                               }
                             }}
                           >
@@ -1937,20 +1938,20 @@ spec:
             when={services().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.services.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.services.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.services.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.services.desc)}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Type</th>
-                  <th>Cluster IP</th>
-                  <th>Ports</th>
-                  <th>Age</th>
-                  <th style={{ "text-align": "right" }}>Access</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Type")}</th>
+                  <th>{t("Cluster IP")}</th>
+                  <th>{t("Ports")}</th>
+                  <th>{t("Age")}</th>
+                  <th style={{ "text-align": "right" }}>{t("Access")}</th>
                   <th />
                 </tr>
               </thead>
@@ -2073,14 +2074,14 @@ spec:
                         <button
                           class="btn btn-sm"
                           style={{ "font-size": "11px", padding: "2px 8px" }}
-                          title="Create an Ingress to expose this service"
+                          title={t("Create an Ingress to expose this service")}
                           onClick={() => openCreateIngress(svc)}
                         >
                           Expose
                         </button>
                         <button
                           class="action-icon"
-                          title="View/Edit YAML"
+                          title={t("View/Edit YAML")}
                           onClick={() => viewYaml("service", svc.name, svc.namespace)}
                         >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
@@ -2095,25 +2096,25 @@ spec:
 
           {/* Network Policies sub-section */}
           <h3 style={{ color: "#e6edf3", "font-size": "14px", "margin-top": "24px", "margin-bottom": "12px" }}>
-            Network Policies
+            {t("Network Policies")}
           </h3>
           <Show
             when={networkPolicies().length > 0}
             fallback={
               <div class="empty-state-tab" style={{ padding: "32px 20px" }}>
-                <div class="empty-state-tab-title">No network policies in this namespace</div>
-                <div class="empty-state-tab-desc">Network policies control traffic flow between pods.</div>
+                <div class="empty-state-tab-title">{t("No network policies in this namespace")}</div>
+                <div class="empty-state-tab-desc">{t("Network policies control traffic flow between pods.")}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Pod Selector</th>
-                  <th>Policy Types</th>
-                  <th>Age</th>
-                  <th>Actions</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Pod Selector")}</th>
+                  <th>{t("Policy Types")}</th>
+                  <th>{t("Age")}</th>
+                  <th>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -2144,23 +2145,23 @@ spec:
                         <div style={{ display: "flex", gap: "4px", "align-items": "center" }}>
                           <button
                             class="action-icon"
-                            title="View YAML"
+                            title={t("View YAML")}
                             onClick={() => viewYaml("networkpolicy", np.name, np.namespace)}
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                           </button>
                           <button
                             class="action-icon action-icon-delete"
-                            title="Delete Network Policy"
+                            title={t("Delete Network Policy")}
                             onClick={async () => {
                               const ok = await confirmDanger(`Delete network policy "${np.name}"?`, "This may affect network connectivity for pods in this namespace.");
                               if (!ok) return;
                               try {
                                 await invoke("k8s_delete_network_policy", { namespace: np.namespace, name: np.name });
-                                showToast(`Deleted network policy ${np.name}`, "success");
+                                showToast(t("Deleted network policy {name}", { name: np.name }), "success");
                                 refreshWorkloads();
                               } catch (e) {
-                                showToast(`Failed to delete: ${e}`, "error");
+                                showToast(t("Failed to delete: {error}", { error: String(e) }), "error");
                               }
                             }}
                           >
@@ -2191,18 +2192,18 @@ spec:
             when={ingresses().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.ingresses.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.ingresses.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.ingresses.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.ingresses.desc)}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Hosts</th>
-                  <th>Address</th>
-                  <th>Age</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Hosts")}</th>
+                  <th>{t("Address")}</th>
+                  <th>{t("Age")}</th>
                   <th />
                 </tr>
               </thead>
@@ -2217,7 +2218,7 @@ spec:
                       <td>
                         <button
                           class="action-icon"
-                          title="View/Edit YAML"
+                          title={t("View/Edit YAML")}
                           onClick={() => viewYaml("ingress", ing.name, ing.namespace)}
                         >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
@@ -2235,7 +2236,7 @@ spec:
         <Show when={tab() === "storage"}>
           <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", "margin-bottom": "12px" }}>
             <h3 style={{ color: "#e6edf3", "font-size": "14px", margin: "0" }}>
-              Persistent Volume Claims
+              {t("Persistent Volume Claims")}
             </h3>
             <button class="btn btn-sm btn-primary" onClick={() => setPvcDialogOpen(true)}>
               + Create PVC
@@ -2245,21 +2246,21 @@ spec:
             when={pvcs().length > 0}
             fallback={
               <div class="empty-state-tab" style={{ "margin-bottom": "24px", padding: "32px 20px" }}>
-                <div class="empty-state-tab-title">No PVCs in this namespace</div>
-                <div class="empty-state-tab-desc">{emptyMessages.storage.desc}</div>
+                <div class="empty-state-tab-title">{t("No PVCs in this namespace")}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.storage.desc)}</div>
               </div>
             }
           >
             <table class="table" style={{ "margin-bottom": "24px" }}>
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Status</th>
-                  <th>Volume</th>
-                  <th>Capacity</th>
-                  <th>Class</th>
-                  <th>Age</th>
-                  <th>Actions</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Status")}</th>
+                  <th>{t("Volume")}</th>
+                  <th>{t("Capacity")}</th>
+                  <th>{t("Class")}</th>
+                  <th>{t("Age")}</th>
+                  <th>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -2284,7 +2285,7 @@ spec:
                       <td>
                         <button
                           class="action-icon action-icon-delete"
-                          title="Delete PVC"
+                          title={t("Delete PVC")}
                           onClick={() => handleDeletePvc(pvc.namespace, pvc.name)}
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -2298,26 +2299,26 @@ spec:
           </Show>
 
           <h3 style={{ color: "#e6edf3", "font-size": "14px", "margin-bottom": "12px" }}>
-            Persistent Volumes
+            {t("Persistent Volumes")}
           </h3>
           <Show
             when={pvs().length > 0}
             fallback={
               <div class="empty-state-tab" style={{ padding: "32px 20px" }}>
-                <div class="empty-state-tab-title">No persistent volumes</div>
+                <div class="empty-state-tab-title">{t("No persistent volumes")}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Capacity</th>
-                  <th>Status</th>
-                  <th>Claim</th>
-                  <th>Reclaim Policy</th>
-                  <th>Class</th>
-                  <th>Age</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Capacity")}</th>
+                  <th>{t("Status")}</th>
+                  <th>{t("Claim")}</th>
+                  <th>{t("Reclaim Policy")}</th>
+                  <th>{t("Class")}</th>
+                  <th>{t("Age")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -2349,26 +2350,26 @@ spec:
 
           {/* Storage Classes sub-section */}
           <h3 style={{ color: "#e6edf3", "font-size": "14px", "margin-top": "24px", "margin-bottom": "12px" }}>
-            Storage Classes
+            {t("Storage Classes")}
           </h3>
           <Show
             when={storageClasses().length > 0}
             fallback={
               <div class="empty-state-tab" style={{ padding: "32px 20px" }}>
-                <div class="empty-state-tab-title">No storage classes</div>
-                <div class="empty-state-tab-desc">Storage classes define how persistent volumes are provisioned.</div>
+                <div class="empty-state-tab-title">{t("No storage classes")}</div>
+                <div class="empty-state-tab-desc">{t("Storage classes define how persistent volumes are provisioned.")}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Provisioner</th>
-                  <th>Reclaim Policy</th>
-                  <th>Binding Mode</th>
-                  <th>Default</th>
-                  <th>Age</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Provisioner")}</th>
+                  <th>{t("Reclaim Policy")}</th>
+                  <th>{t("Binding Mode")}</th>
+                  <th>{t("Default")}</th>
+                  <th>{t("Age")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -2409,20 +2410,20 @@ spec:
             when={events().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.events.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.events.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.events.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.events.desc)}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Type</th>
-                  <th>Reason</th>
-                  <th>Object</th>
-                  <th>Message</th>
-                  <th>Count</th>
-                  <th>Age</th>
+                  <th>{t("Type")}</th>
+                  <th>{t("Reason")}</th>
+                  <th>{t("Object")}</th>
+                  <th>{t("Message")}</th>
+                  <th>{t("Count")}</th>
+                  <th>{t("Age")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -2470,7 +2471,7 @@ spec:
             <Show when={configSubTab() === "secrets"}>
               <div style={{ "margin-left": "auto" }}>
                 <button class="btn btn-sm btn-primary" onClick={openCreateSecretDialog}>
-                  + Create Secret
+                  {t("+ Create Secret")}
                 </button>
               </div>
             </Show>
@@ -2481,18 +2482,18 @@ spec:
               when={configMaps().length > 0}
               fallback={
                 <div class="empty-state-tab">
-                  <div class="empty-state-tab-title">No ConfigMaps in this namespace</div>
-                  <div class="empty-state-tab-desc">ConfigMaps store non-sensitive configuration data.</div>
+                  <div class="empty-state-tab-title">{t("No ConfigMaps in this namespace")}</div>
+                  <div class="empty-state-tab-desc">{t("ConfigMaps store non-sensitive configuration data.")}</div>
                 </div>
               }
             >
               <table class="table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Keys</th>
-                    <th>Age</th>
-                    <th>Actions</th>
+                    <th>{t("Name")}</th>
+                    <th>{t("Keys")}</th>
+                    <th>{t("Age")}</th>
+                    <th>{t("Actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2506,14 +2507,14 @@ spec:
                           <div style={{ display: "flex", gap: "4px" }}>
                             <button
                               class="action-icon"
-                              title="View data"
+                              title={t("View data")}
                               onClick={() => setViewConfigMap(cm)}
                             >
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                             </button>
                             <button
                               class="action-icon"
-                              title="View/Edit YAML"
+                              title={t("View/Edit YAML")}
                               onClick={() => viewYaml("configmap", cm.name, cm.namespace)}
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
@@ -2533,19 +2534,19 @@ spec:
               when={secrets().length > 0}
               fallback={
                 <div class="empty-state-tab">
-                  <div class="empty-state-tab-title">No Secrets in this namespace</div>
-                  <div class="empty-state-tab-desc">Secrets store sensitive data like passwords and API keys.</div>
+                  <div class="empty-state-tab-title">{t("No Secrets in this namespace")}</div>
+                  <div class="empty-state-tab-desc">{t("Secrets store sensitive data like passwords and API keys.")}</div>
                 </div>
               }
             >
               <table class="table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Keys</th>
-                    <th>Age</th>
-                    <th>Actions</th>
+                    <th>{t("Name")}</th>
+                    <th>{t("Type")}</th>
+                    <th>{t("Keys")}</th>
+                    <th>{t("Age")}</th>
+                    <th>{t("Actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2560,28 +2561,28 @@ spec:
                           <div style={{ display: "flex", gap: "4px" }}>
                             <button
                               class="action-icon"
-                              title="View secret values"
+                              title={t("View secret values")}
                               onClick={() => { setRevealedKeys(new Set<string>()); setViewSecret(sec); }}
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                             </button>
                             <button
                               class="action-icon"
-                              title="Edit secret data"
+                              title={t("Edit secret data")}
                               onClick={() => openEditSecretDialog(sec)}
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                             </button>
                             <button
                               class="action-icon"
-                              title="View/Edit YAML"
+                              title={t("View/Edit YAML")}
                               onClick={() => viewYaml("secret", sec.name, sec.namespace)}
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
                             </button>
                             <button
                               class="action-icon action-icon-delete"
-                              title="Delete secret"
+                              title={t("Delete secret")}
                               onClick={() => handleDeleteSecret(sec.namespace, sec.name)}
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -2601,25 +2602,25 @@ spec:
         <Show when={tab() === "helm"}>
           <Show when={helmAvailable() === false}>
             <div class="empty-state-tab">
-              <div class="empty-state-tab-title">Helm is not installed</div>
+              <div class="empty-state-tab-title">{t("Helm is not installed")}</div>
               <div class="empty-state-tab-desc">
-                Helm is the package manager for Kubernetes — install it to deploy charts.
+                {t("Helm is the package manager for Kubernetes — install it to deploy charts.")}
               </div>
               <button
                 class="btn btn-primary"
                 style={{ "margin-top": "12px" }}
                 onClick={async () => {
-                  showToast("Installing Helm — this may take a minute...", "info");
+                  showToast(t("Installing Helm — this may take a minute..."), "info");
                   try {
                     await invoke("env_fix", { action: "install_helm" });
-                    showToast("Helm installed!", "success");
+                    showToast(t("Helm installed!"), "success");
                     setHelmAvailable(true);
                   } catch (e) {
-                    showToast(`Helm install failed: ${e}`, "error");
+                    showToast(t("Helm install failed: {error}", { error: String(e) }), "error");
                   }
                 }}
               >
-                Install Helm
+                {t("Install Helm")}
               </button>
             </div>
           </Show>
@@ -2632,16 +2633,16 @@ spec:
             <div style={{ display: "flex", "justify-content": "flex-end", "margin-bottom": "8px" }}>
               <button class="btn btn-primary" style={{ display: "inline-flex", "align-items": "center", gap: "6px" }} onClick={() => { setHelmInstallNs(selectedNs()); setHelmInstallOpen(true); }}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Install Chart
+                {t("Install Chart")}
               </button>
             </div>
             <Show
               when={helmReleases().length > 0}
               fallback={
                 <div class="empty-state-tab">
-                  <div class="empty-state-tab-title">{emptyMessages.helm.title}</div>
+                  <div class="empty-state-tab-title">{t(emptyMessages.helm.title)}</div>
                   <div class="empty-state-tab-desc">
-                    Click "Install Chart" above or use <code style={{ background: "#0d1117", padding: "2px 6px", "border-radius": "4px" }}>helm install</code> CLI to add releases.
+                    {t("Click \"Install Chart\" above or use")} <code style={{ background: "#0d1117", padding: "2px 6px", "border-radius": "4px" }}>helm install</code> CLI to add releases.
                   </div>
                 </div>
               }
@@ -2649,13 +2650,13 @@ spec:
               <table class="table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Namespace</th>
-                    <th>Chart</th>
-                    <th>Status</th>
-                    <th>Revision</th>
-                    <th>Updated</th>
-                    <th>Actions</th>
+                    <th>{t("Name")}</th>
+                    <th>{t("Namespace")}</th>
+                    <th>{t("Chart")}</th>
+                    <th>{t("Status")}</th>
+                    <th>{t("Revision")}</th>
+                    <th>{t("Updated")}</th>
+                    <th>{t("Actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2680,7 +2681,7 @@ spec:
                         <td>
                           <button
                             class="action-icon action-icon-delete"
-                            title="Uninstall release"
+                            title={t("Uninstall release")}
                             onClick={() => handleHelmUninstall(rel.name, rel.namespace)}
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -2701,23 +2702,23 @@ spec:
             when={cronJobs().length > 0 || jobs().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.jobs.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.jobs.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.jobs.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.jobs.desc)}</div>
               </div>
             }
           >
             {/* CronJobs Section */}
             <Show when={cronJobs().length > 0}>
-              <h3 style={{ margin: "16px 0 8px", color: "#e6edf3", "font-size": "14px", "font-weight": "600" }}>CronJobs</h3>
+              <h3 style={{ margin: "16px 0 8px", color: "#e6edf3", "font-size": "14px", "font-weight": "600" }}>{t("CronJobs")}</h3>
               <table class="table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Schedule</th>
-                    <th>Suspend</th>
-                    <th>Active</th>
-                    <th>Last Scheduled</th>
-                    <th>Actions</th>
+                    <th>{t("Name")}</th>
+                    <th>{t("Schedule")}</th>
+                    <th>{t("Suspend")}</th>
+                    <th>{t("Active")}</th>
+                    <th>{t("Last Scheduled")}</th>
+                    <th>{t("Actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2734,7 +2735,7 @@ spec:
                               "border-radius": "4px",
                               background: "#30363d",
                               color: "#8b949e",
-                            }}>Suspended</span>
+                            }}>{t("Suspended")}</span>
                           </Show>
                         </td>
                         <td class="mono" style={{ "font-size": "12px", color: "#8b949e" }}>{cj.schedule}</td>
@@ -2750,15 +2751,15 @@ spec:
                         <td style={{ display: "flex", gap: "4px" }}>
                           <button
                             class="action-icon"
-                            title="Trigger Job now"
+                            title={t("Trigger Job now")}
                             onClick={async () => {
                               try {
                                 const result = await invoke("k8s_trigger_cronjob", { namespace: cj.namespace, name: cj.name }) as { job: string };
-                                showToast(`Job created: ${result.job}`, "success");
+                                showToast(t("Job created: {name}", { name: result.job }), "success");
                                 logInfo(`Triggered CronJob ${cj.name} -> ${result.job}`);
                                 refreshWorkloads();
                               } catch (e) {
-                                showToast(`Failed to trigger: ${e}`, "error");
+                                showToast(t("Failed to trigger: {error}", { error: String(e) }), "error");
                               }
                             }}
                           >
@@ -2766,15 +2767,15 @@ spec:
                           </button>
                           <button
                             class="action-icon"
-                            title={cj.suspend ? "Resume CronJob" : "Suspend CronJob"}
+                            title={cj.suspend ? t("Resume CronJob") : t("Suspend CronJob")}
                             onClick={async () => {
                               try {
                                 await invoke("k8s_suspend_cronjob", { namespace: cj.namespace, name: cj.name, suspend: !cj.suspend });
-                                showToast(`CronJob ${cj.name} ${cj.suspend ? "resumed" : "suspended"}`, "success");
+                                showToast(t("CronJob {name} {action}", { name: cj.name, action: cj.suspend ? t("resumed") : t("suspended") }), "success");
                                 logInfo(`${cj.suspend ? "Resumed" : "Suspended"} CronJob ${cj.name}`);
                                 refreshWorkloads();
                               } catch (e) {
-                                showToast(`Failed: ${e}`, "error");
+                                showToast(t("Failed: {error}", { error: String(e) }), "error");
                               }
                             }}
                           >
@@ -2788,23 +2789,23 @@ spec:
                           </button>
                           <button
                             class="action-icon"
-                            title="View YAML"
+                            title={t("View YAML")}
                             onClick={() => viewYaml("CronJob", cj.name, cj.namespace)}
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
                           </button>
                           <button
                             class="action-icon action-icon-delete"
-                            title="Delete CronJob"
+                            title={t("Delete CronJob")}
                             onClick={async () => {
                               if (!await confirmDanger(`Delete CronJob "${cj.name}"?`, "This will remove the CronJob and stop future scheduling.")) return;
                               try {
                                 await invoke("k8s_delete_cronjob", { namespace: cj.namespace, name: cj.name });
-                                showToast(`CronJob ${cj.name} deleted`, "success");
+                                showToast(t("CronJob {name} deleted", { name: cj.name }), "success");
                                 logInfo(`Deleted CronJob ${cj.name}`);
                                 refreshWorkloads();
                               } catch (e) {
-                                showToast(`Delete failed: ${e}`, "error");
+                                showToast(t("Delete failed: {error}", { error: String(e) }), "error");
                               }
                             }}
                           >
@@ -2820,16 +2821,16 @@ spec:
 
             {/* Jobs Section */}
             <Show when={jobs().length > 0}>
-              <h3 style={{ margin: "16px 0 8px", color: "#e6edf3", "font-size": "14px", "font-weight": "600" }}>Jobs</h3>
+              <h3 style={{ margin: "16px 0 8px", color: "#e6edf3", "font-size": "14px", "font-weight": "600" }}>{t("Jobs")}</h3>
               <table class="table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Status</th>
-                    <th>Completions</th>
-                    <th>Duration</th>
-                    <th>Started</th>
-                    <th>Actions</th>
+                    <th>{t("Name")}</th>
+                    <th>{t("Status")}</th>
+                    <th>{t("Completions")}</th>
+                    <th>{t("Duration")}</th>
+                    <th>{t("Started")}</th>
+                    <th>{t("Actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2853,37 +2854,37 @@ spec:
                         <td style={{ display: "flex", gap: "4px" }}>
                           <button
                             class="action-icon"
-                            title="View Logs"
+                            title={t("View Logs")}
                             onClick={() => {
                               setLogPod(job.name);
                               setLogLines([]);
                               setLogFollow(false);
                               invoke("k8s_pod_logs", { namespace: job.namespace, name: job.name, tail: logTail() })
                                 .then((lines) => setLogLines(lines as string[]))
-                                .catch((e) => showToast(`Failed to get logs: ${e}`, "error"));
+                                .catch((e) => showToast(t("Failed to get logs: {error}", { error: String(e) }), "error"));
                             }}
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
                           </button>
                           <button
                             class="action-icon"
-                            title="View YAML"
+                            title={t("View YAML")}
                             onClick={() => viewYaml("Job", job.name, job.namespace)}
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
                           </button>
                           <button
                             class="action-icon action-icon-delete"
-                            title="Delete Job"
+                            title={t("Delete Job")}
                             onClick={async () => {
                               if (!await confirmDanger(`Delete Job "${job.name}"?`, "This will remove the Job and its pods.")) return;
                               try {
                                 await invoke("k8s_delete_job", { namespace: job.namespace, name: job.name });
-                                showToast(`Job ${job.name} deleted`, "success");
+                                showToast(t("Job {name} deleted", { name: job.name }), "success");
                                 logInfo(`Deleted Job ${job.name}`);
                                 refreshWorkloads();
                               } catch (e) {
-                                showToast(`Delete failed: ${e}`, "error");
+                                showToast(t("Delete failed: {error}", { error: String(e) }), "error");
                               }
                             }}
                           >
@@ -2905,21 +2906,21 @@ spec:
             when={crds().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.crds.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.crds.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.crds.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.crds.desc)}</div>
               </div>
             }
           >
             <table class="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Group</th>
-                  <th>Kind</th>
-                  <th>Scope</th>
-                  <th>Versions</th>
-                  <th>Age</th>
-                  <th>Actions</th>
+                  <th>{t("Name")}</th>
+                  <th>{t("Group")}</th>
+                  <th>{t("Kind")}</th>
+                  <th>{t("Scope")}</th>
+                  <th>{t("Versions")}</th>
+                  <th>{t("Age")}</th>
+                  <th>{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -2947,7 +2948,7 @@ spec:
                       <td>
                         <button
                           class="action-icon"
-                          title="View YAML"
+                          title={t("View YAML")}
                           onClick={() => viewYaml("crd", crd.name, "default")}
                         >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
@@ -2967,8 +2968,8 @@ spec:
             when={deployments().length > 0 || services().length > 0 || pods().length > 0}
             fallback={
               <div class="empty-state-tab">
-                <div class="empty-state-tab-title">{emptyMessages.topology.title}</div>
-                <div class="empty-state-tab-desc">{emptyMessages.topology.desc}</div>
+                <div class="empty-state-tab-title">{t(emptyMessages.topology.title)}</div>
+                <div class="empty-state-tab-desc">{t(emptyMessages.topology.desc)}</div>
               </div>
             }
           >
@@ -3003,7 +3004,7 @@ spec:
                         onClick={() => setTab("services")}
                         onMouseEnter={() => setTopoHover(svcKey)}
                         onMouseLeave={() => setTopoHover(null)}
-                        title="Click to view services"
+                        title={t("Click to view services")}
                       >
                         <div style={{ display: "flex", "align-items": "center", gap: "6px", "margin-bottom": "6px" }}>
                           <span style={{ "font-size": "14px" }}>{"\u29BF"}</span>
@@ -3064,7 +3065,7 @@ spec:
                                 onClick={() => setTab("deployments")}
                                 onMouseEnter={() => setTopoHover(depKey)}
                                 onMouseLeave={() => setTopoHover(null)}
-                                title="Click to view deployments"
+                                title={t("Click to view deployments")}
                               >
                                 <div style={{ display: "flex", "align-items": "center", gap: "6px", "margin-bottom": "6px" }}>
                                   <span style={{ "font-size": "14px" }}>{"\u25A6"}</span>
@@ -3115,7 +3116,7 @@ spec:
                                           onClick={() => setTab("pods")}
                                           onMouseEnter={() => setTopoHover(podKey)}
                                           onMouseLeave={() => setTopoHover(null)}
-                                          title="Click to view pods"
+                                          title={t("Click to view pods")}
                                         >
                                           <div style={{ display: "flex", "align-items": "center", gap: "6px", "margin-bottom": "4px" }}>
                                             <span style={{
@@ -3348,12 +3349,12 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setHelmInstallOpen(false); }}>
           <div class="modal-dialog" style={{ "max-width": "520px" }}>
             <div class="modal-header">
-              <span class="modal-title">Install Helm Chart</span>
+              <span class="modal-title">{t("Install Helm Chart")}</span>
               <button class="modal-close" onClick={() => setHelmInstallOpen(false)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px", display: "flex", "flex-direction": "column", gap: "14px" }}>
               <div class="form-group">
-                <label class="form-label">Release Name</label>
+                <label class="form-label">{t("Release Name")}</label>
                 <input
                   class="form-input"
                   type="text"
@@ -3364,7 +3365,7 @@ spec:
                 />
               </div>
               <div class="form-group">
-                <label class="form-label">Chart</label>
+                <label class="form-label">{t("Chart")}</label>
                 <input
                   class="form-input"
                   type="text"
@@ -3373,10 +3374,10 @@ spec:
                   onInput={(e) => setHelmChartName(e.currentTarget.value)}
                   style={{ width: "100%" }}
                 />
-                <span class="form-hint">e.g. bitnami/nginx, ingress-nginx/ingress-nginx</span>
+                <span class="form-hint">{t("e.g. bitnami/nginx, ingress-nginx/ingress-nginx")}</span>
               </div>
               <div class="form-group">
-                <label class="form-label">Namespace</label>
+                <label class="form-label">{t("Namespace")}</label>
                 <Dropdown
                   options={namespaces().map((n) => ({ value: n.name, label: n.name }))}
                   value={helmInstallNs()}
@@ -3387,7 +3388,7 @@ spec:
               </div>
               <div>
                 <label class="form-label">
-                  Set Values <span style={{ color: "#6e7681", "font-weight": "400" }}>(optional)</span>
+                  {t("Set Values")} <span style={{ color: "#6e7681", "font-weight": "400" }}>{t("(optional)")}</span>
                 </label>
                 <For each={helmSetValues()}>
                   {(entry, i) => (
@@ -3424,7 +3425,7 @@ spec:
                           vals.splice(i(), 1);
                           setHelmSetValues(vals);
                         }}
-                        title="Remove"
+                        title={t("Remove")}
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                       </button>
@@ -3436,16 +3437,16 @@ spec:
                   style={{ "font-size": "12px" }}
                   onClick={() => setHelmSetValues([...helmSetValues(), { key: "", value: "" }])}
                 >
-                  + Add Value
+                  {t("+ Add Value")}
                 </button>
               </div>
               <div style={{ "font-size": "11px", color: "#6e7681", background: "#0d1117", padding: "8px 10px", "border-radius": "6px", border: "1px solid #21262d" }}>
-                Add chart repos first, e.g.:<br />
+                {t("Add chart repos first, e.g.:")}<br />
                 <code style={{ "font-size": "11px" }}>helm repo add bitnami https://charts.bitnami.com/bitnami</code>
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setHelmInstallOpen(false)}>Cancel</button>
+              <button class="btn" onClick={() => setHelmInstallOpen(false)}>{t("Cancel")}</button>
               <button class="btn btn-primary" onClick={handleHelmInstall} disabled={helmInstalling()}>
                 {helmInstalling() ? "Installing..." : "Install"}
               </button>
@@ -3461,7 +3462,7 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setRollbackDep(null); }}>
           <div class="modal-dialog" style={{ "max-width": "500px" }}>
             <div class="modal-header">
-              <span class="modal-title">Rollout History: {rollbackDep()!.name}</span>
+              <span class="modal-title">{t("Rollout History")}: {rollbackDep()!.name}</span>
               <button class="modal-close" onClick={() => setRollbackDep(null)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px" }}>
@@ -3470,13 +3471,13 @@ spec:
               </Show>
               <Show when={!rollbackLoading()}>
                 <Show when={rollbackHistory().length > 0} fallback={
-                  <div style={{ color: "#8b949e", "font-size": "13px" }}>No rollout history available</div>
+                  <div style={{ color: "#8b949e", "font-size": "13px" }}>{t("No rollout history available")}</div>
                 }>
                   <table class="table">
                     <thead>
                       <tr>
-                        <th>Revision</th>
-                        <th>Change Cause</th>
+                        <th>{t("Revision")}</th>
+                        <th>{t("Change Cause")}</th>
                         <th />
                       </tr>
                     </thead>
@@ -3506,7 +3507,7 @@ spec:
               </Show>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setRollbackDep(null)}>Close</button>
+              <button class="btn" onClick={() => setRollbackDep(null)}>{t("Close")}</button>
             </div>
           </div>
         </div>
@@ -3519,7 +3520,7 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setPortDialogSvc(null); }}>
           <div class="modal-dialog" style={{ "max-width": "420px" }}>
             <div class="modal-header">
-              <span class="modal-title">Port Forward: {portDialogSvc()!.name}</span>
+              <span class="modal-title">{t("Port Forward")}: {portDialogSvc()!.name}</span>
               <button class="modal-close" onClick={() => setPortDialogSvc(null)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px" }}>
@@ -3661,7 +3662,7 @@ spec:
                         if (emptyStreak >= EMPTY_STREAK_LIMIT) {
                           if (logFollowInterval) { clearInterval(logFollowInterval); logFollowInterval = null; }
                           setLogFollow(false);
-                          showToast("Pod no longer available — stopped following logs", "info");
+                          showToast(t("Pod no longer available — stopped following logs"), "info");
                         }
                       };
                       logFollowInterval = setInterval(poll, 2000);
@@ -3677,7 +3678,7 @@ spec:
                   setLogPod(null);
                   setLogFollow(false);
                   if (logFollowInterval) { clearInterval(logFollowInterval); logFollowInterval = null; }
-                }}>Close</button>
+                }}>{t("Close")}</button>
               </div>
             </div>
             <div ref={logContainerRef} class="selectable" style={{
@@ -3693,7 +3694,7 @@ spec:
             }}>
               <Show
                 when={logLines().length > 0}
-                fallback={<span style={{ color: "#8b949e" }}>No log output</span>}
+                fallback={<span style={{ color: "#8b949e" }}>{t("No log output")}</span>}
               >
                 <For each={logLines()}>
                   {(line) => <div>{line}</div>}
@@ -3756,7 +3757,7 @@ spec:
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setScaleTarget(null)}>Cancel</button>
+              <button class="btn" onClick={() => setScaleTarget(null)}>{t("Cancel")}</button>
               <button
                 class="btn btn-primary"
                 onClick={doScale}
@@ -3799,9 +3800,9 @@ spec:
                     ? <span style={{ color: "#3fb950" }}>{"\u2713"} Kubernetes cluster ready</span>
                     : setupSuccess() === false
                     ? <span style={{ color: "#f85149" }}>{"\u2717"} Kubernetes setup failed</span>
-                    : <span>Kubernetes Setup</span>
+                    : <span>{t("Kubernetes Setup")}</span>
                 }>
-                  <span>Setting up Kubernetes...</span>
+                  <span>{t("Setting up Kubernetes...")}</span>
                 </Show>
               </span>
               <Show when={!setupRunning()}>
@@ -3826,11 +3827,11 @@ spec:
             </div>
             <div class="modal-footer">
               <Show when={!setupRunning()}>
-                <button class="btn btn-primary" onClick={closeSetupDialog}>Close</button>
+                <button class="btn btn-primary" onClick={closeSetupDialog}>{t("Close")}</button>
               </Show>
               <Show when={setupRunning()}>
                 <span style={{ "font-size": "12px", color: "var(--text-muted)" }}>
-                  This may take several minutes — downloading k3s and waiting for the cluster...
+                  {t("This may take several minutes — downloading k3s and waiting for the cluster...")}
                 </span>
               </Show>
             </div>
@@ -3846,7 +3847,7 @@ spec:
           <div class="modal-dialog" style={{ width: "1000px", "max-width": "92vw", height: "85vh", display: "flex", "flex-direction": "column", background: "#1a1b26" }}>
             <YamlEditor
               value={"# Enter your Kubernetes YAML here\n# Example:\n# apiVersion: v1\n# kind: Pod\n# metadata:\n#   name: my-pod\n# spec:\n#   containers:\n#   - name: my-container\n#     image: nginx\n"}
-              title="Deploy from YAML"
+              title={t("Deploy from YAML")}
               onSave={handleDeployYaml}
               onClose={() => setDeployYamlOpen(false)}
             />
@@ -3861,11 +3862,11 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setCreateNsOpen(false); }}>
           <div class="modal-dialog" style={{ "max-width": "400px" }}>
             <div class="modal-header">
-              <span class="modal-title">Create Namespace</span>
+              <span class="modal-title">{t("Create Namespace")}</span>
               <button class="modal-close" onClick={() => setCreateNsOpen(false)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px" }}>
-              <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "6px" }}>Namespace name</label>
+              <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "6px" }}>{t("Namespace name")}</label>
               <input
                 type="text"
                 class="form-input"
@@ -3878,13 +3879,13 @@ spec:
               />
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setCreateNsOpen(false)}>Cancel</button>
+              <button class="btn" onClick={() => setCreateNsOpen(false)}>{t("Cancel")}</button>
               <button
                 class="btn btn-primary"
                 onClick={handleCreateNamespace}
                 disabled={!newNsName().trim()}
               >
-                Create
+                {t("Create")}
               </button>
             </div>
           </div>
@@ -3898,7 +3899,7 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setShellPod(null); }}>
           <div class="modal-dialog" style={{ width: "800px", height: "600px", "max-width": "90vw", "max-height": "85vh", display: "flex", "flex-direction": "column" }}>
             <div class="modal-header">
-              <span class="modal-title">Terminal: {shellPod()!.name}</span>
+              <span class="modal-title">{t("Terminal")}: {shellPod()!.name}</span>
               <button class="modal-close" onClick={() => setShellPod(null)}>{"\u00d7"}</button>
             </div>
             <div style={{ flex: "1", "min-height": "0" }}>
@@ -3915,7 +3916,7 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setViewConfigMap(null); }}>
           <div class="modal-dialog" style={{ width: "700px", "max-width": "90vw", "max-height": "80vh", display: "flex", "flex-direction": "column" }}>
             <div class="modal-header">
-              <span class="modal-title">ConfigMap: {viewConfigMap()!.name}</span>
+              <span class="modal-title">{t("ConfigMap")}: {viewConfigMap()!.name}</span>
               <button class="modal-close" onClick={() => setViewConfigMap(null)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px", overflow: "auto", flex: "1" }}>
@@ -3941,11 +3942,11 @@ spec:
                 )}
               </For>
               <Show when={Object.keys(viewConfigMap()!.data).length === 0}>
-                <div style={{ color: "#8b949e", "font-size": "13px" }}>No data in this ConfigMap</div>
+                <div style={{ color: "#8b949e", "font-size": "13px" }}>{t("No data in this ConfigMap")}</div>
               </Show>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setViewConfigMap(null)}>Close</button>
+              <button class="btn" onClick={() => setViewConfigMap(null)}>{t("Close")}</button>
             </div>
           </div>
         </div>
@@ -4006,11 +4007,11 @@ spec:
                 }}
               </For>
               <Show when={Object.keys(viewSecret()!.data).length === 0}>
-                <div style={{ color: "#8b949e", "font-size": "13px" }}>No data in this Secret</div>
+                <div style={{ color: "#8b949e", "font-size": "13px" }}>{t("No data in this Secret")}</div>
               </Show>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setViewSecret(null)}>Close</button>
+              <button class="btn" onClick={() => setViewSecret(null)}>{t("Close")}</button>
             </div>
           </div>
         </div>
@@ -4023,12 +4024,12 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setCreateIngressOpen(false); }}>
           <div class="modal-dialog" style={{ "max-width": "520px" }}>
             <div class="modal-header">
-              <span class="modal-title">Create Ingress</span>
+              <span class="modal-title">{t("Create Ingress")}</span>
               <button class="modal-close" onClick={() => setCreateIngressOpen(false)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px", display: "flex", "flex-direction": "column", gap: "14px" }}>
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Ingress Name</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Ingress Name")}</label>
                 <input
                   type="text"
                   class="form-input"
@@ -4040,7 +4041,7 @@ spec:
                 />
               </div>
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Hostname</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Hostname")}</label>
                 <input
                   type="text"
                   class="form-input"
@@ -4052,7 +4053,7 @@ spec:
               </div>
               <div style={{ display: "flex", gap: "12px" }}>
                 <div style={{ flex: "1" }}>
-                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Service</label>
+                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Service")}</label>
                   <Dropdown
                     value={ingressServiceName()}
                     options={ingressServices().map((s) => ({ value: s.name, label: s.name }))}
@@ -4071,7 +4072,7 @@ spec:
                   />
                 </div>
                 <div style={{ "min-width": "120px" }}>
-                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Port</label>
+                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Port")}</label>
                   <Dropdown
                     value={ingressServicePort()}
                     options={(() => {
@@ -4090,7 +4091,7 @@ spec:
               </div>
               <div style={{ display: "flex", gap: "12px" }}>
                 <div style={{ flex: "1" }}>
-                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Path</label>
+                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Path")}</label>
                   <input
                     type="text"
                     class="form-input"
@@ -4101,7 +4102,7 @@ spec:
                   />
                 </div>
                 <div style={{ "min-width": "180px" }}>
-                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Path Type</label>
+                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Path Type")}</label>
                   <Dropdown
                     value={ingressPathType()}
                     options={[
@@ -4122,7 +4123,7 @@ spec:
                   onChange={(e) => setIngressTls(e.currentTarget.checked)}
                 />
                 <label for="ingress-tls" style={{ "font-size": "12px", color: "#c9d1d9", cursor: "pointer" }}>
-                  Enable TLS
+                  {t("Enable TLS")}
                 </label>
                 <Show when={ingressTls() && ingressHostname().trim()}>
                   <span style={{ "font-size": "11px", color: "#8b949e" }}>
@@ -4132,7 +4133,7 @@ spec:
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setCreateIngressOpen(false)}>Cancel</button>
+              <button class="btn" onClick={() => setCreateIngressOpen(false)}>{t("Cancel")}</button>
               <button
                 class="btn btn-primary"
                 onClick={handleCreateIngress}
@@ -4158,7 +4159,7 @@ spec:
             <div style={{ padding: "16px", display: "flex", "flex-direction": "column", gap: "14px", "max-height": "60vh", overflow: "auto" }}>
               <Show when={secretDialogMode() === "create"}>
                 <div>
-                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Name</label>
+                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Name")}</label>
                   <input
                     type="text"
                     class="form-input"
@@ -4170,7 +4171,7 @@ spec:
                   />
                 </div>
                 <div>
-                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Type</label>
+                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Type")}</label>
                   <Dropdown
                     value={secretDialogType()}
                     onChange={(v) => {
@@ -4192,7 +4193,7 @@ spec:
               </Show>
 
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "8px" }}>Data Entries</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "8px" }}>{t("Data Entries")}</label>
                 <Index each={secretDialogEntries()}>
                   {(entry, i) => {
                     const isTls = () => secretDialogType() === "kubernetes.io/tls" && (entry().key === "tls.crt" || entry().key === "tls.key");
@@ -4241,7 +4242,7 @@ spec:
                         }>
                           <textarea
                             class="form-input"
-                            placeholder={entry().key === "tls.crt" ? "Paste certificate PEM..." : "Paste private key PEM..."}
+                            placeholder={entry().key === "tls.crt" ? t("Paste certificate PEM...") : t("Paste private key PEM...")}
                             value={entry().value}
                             onInput={(e) => {
                               const entries = [...secretDialogEntries()];
@@ -4253,7 +4254,7 @@ spec:
                         </Show>
                         <button
                           class="action-icon action-icon-delete"
-                          title="Remove entry"
+                          title={t("Remove entry")}
                           disabled={isTls()}
                           onClick={() => {
                             const entries = secretDialogEntries().filter((_, idx) => idx !== i);
@@ -4277,7 +4278,7 @@ spec:
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setSecretDialogOpen(false)}>Cancel</button>
+              <button class="btn" onClick={() => setSecretDialogOpen(false)}>{t("Cancel")}</button>
               <button
                 class="btn btn-primary"
                 onClick={handleSaveSecret}
@@ -4297,12 +4298,12 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setPvcDialogOpen(false); }}>
           <div class="modal-dialog" style={{ "max-width": "480px" }}>
             <div class="modal-header">
-              <span class="modal-title">Create Persistent Volume Claim</span>
+              <span class="modal-title">{t("Create Persistent Volume Claim")}</span>
               <button class="modal-close" onClick={() => setPvcDialogOpen(false)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px", display: "flex", "flex-direction": "column", gap: "14px" }}>
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Name</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Name")}</label>
                 <input
                   type="text"
                   class="form-input"
@@ -4314,11 +4315,11 @@ spec:
                 />
               </div>
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Storage Class</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Storage Class")}</label>
                 <input
                   type="text"
                   class="form-input"
-                  placeholder="e.g. local-path (k3s default)"
+                  placeholder={t("e.g. local-path (k3s default)")}
                   value={pvcStorageClass()}
                   onInput={(e) => setPvcStorageClass(e.currentTarget.value)}
                   style={{ width: "100%" }}
@@ -4328,7 +4329,7 @@ spec:
                 </div>
               </div>
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Size</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Size")}</label>
                 <div style={{ display: "flex", gap: "8px" }}>
                   <input
                     type="number"
@@ -4351,7 +4352,7 @@ spec:
                 </div>
               </div>
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "8px" }}>Access Modes</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "8px" }}>{t("Access Modes")}</label>
                 <For each={["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"] as const}>{(mode) => (
                   <label style={{ display: "flex", "align-items": "center", gap: "8px", "margin-bottom": "6px", "font-size": "13px", color: "#c9d1d9", cursor: "pointer" }}>
                     <input
@@ -4369,7 +4370,7 @@ spec:
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setPvcDialogOpen(false)}>Cancel</button>
+              <button class="btn" onClick={() => setPvcDialogOpen(false)}>{t("Cancel")}</button>
               <button
                 class="btn btn-primary"
                 onClick={handleCreatePvc}
@@ -4389,12 +4390,12 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setHpaDialogOpen(false); }}>
           <div class="modal-dialog" style={{ "max-width": "480px" }}>
             <div class="modal-header">
-              <span class="modal-title">Create Horizontal Pod Autoscaler</span>
+              <span class="modal-title">{t("Create Horizontal Pod Autoscaler")}</span>
               <button class="modal-close" onClick={() => setHpaDialogOpen(false)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px", display: "flex", "flex-direction": "column", gap: "14px" }}>
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Deployment</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Deployment")}</label>
                 <Dropdown
                   value={hpaDeployment()}
                   onChange={setHpaDeployment}
@@ -4404,7 +4405,7 @@ spec:
                 />
               </div>
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>HPA Name</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("HPA Name")}</label>
                 <input
                   type="text"
                   class="form-input"
@@ -4416,7 +4417,7 @@ spec:
               </div>
               <div style={{ display: "flex", gap: "12px" }}>
                 <div style={{ flex: 1 }}>
-                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Min Replicas</label>
+                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Min Replicas")}</label>
                   <input
                     type="number"
                     class="form-input"
@@ -4427,7 +4428,7 @@ spec:
                   />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>Max Replicas</label>
+                  <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("Max Replicas")}</label>
                   <input
                     type="number"
                     class="form-input"
@@ -4439,7 +4440,7 @@ spec:
                 </div>
               </div>
               <div>
-                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>CPU Target %</label>
+                <label style={{ "font-size": "12px", color: "#8b949e", display: "block", "margin-bottom": "4px" }}>{t("CPU Target %")}</label>
                 <input
                   type="number"
                   class="form-input"
@@ -4455,7 +4456,7 @@ spec:
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setHpaDialogOpen(false)}>Cancel</button>
+              <button class="btn" onClick={() => setHpaDialogOpen(false)}>{t("Cancel")}</button>
               <button
                 class="btn btn-primary"
                 onClick={async () => {
@@ -4470,18 +4471,18 @@ spec:
                       max: parseInt(hpaMax()) || 5,
                       cpuTarget: parseInt(hpaCpuTarget()) || 50,
                     });
-                    showToast(`Created HPA ${hpaName()}`, "success");
+                    showToast(t("Created HPA {name}", { name: hpaName() }), "success");
                     setHpaDialogOpen(false);
                     refreshWorkloads();
                   } catch (e) {
-                    showToast(`Failed to create HPA: ${e}`, "error");
+                    showToast(t("Failed to create HPA: {error}", { error: String(e) }), "error");
                   } finally {
                     setHpaCreating(false);
                   }
                 }}
                 disabled={hpaCreating() || !hpaName().trim() || !hpaDeployment().trim()}
               >
-                {hpaCreating() ? "Creating..." : "Create"}
+                {hpaCreating() ? t("Creating...") : t("Create")}
               </button>
             </div>
           </div>
@@ -4495,18 +4496,18 @@ spec:
           onClick={(e) => { if ((e.currentTarget as any).__mdTarget === e.target && (e.target as HTMLElement).classList.contains("modal-overlay")) setTraefikInfoOpen(false); }}>
           <div class="modal-dialog" style={{ "max-width": "480px" }}>
             <div class="modal-header">
-              <span class="modal-title">Traefik Ingress Controller</span>
+              <span class="modal-title">{t("Traefik Ingress Controller")}</span>
               <button class="modal-close" onClick={() => setTraefikInfoOpen(false)}>{"\u00d7"}</button>
             </div>
             <div style={{ padding: "16px" }}>
               <div style={{ "margin-bottom": "16px" }}>
-                <div style={{ "font-size": "12px", color: "#8b949e", "margin-bottom": "8px" }}>Entrypoints</div>
+                <div style={{ "font-size": "12px", color: "#8b949e", "margin-bottom": "8px" }}>{t("Entrypoints")}</div>
                 <table class="table" style={{ "margin-bottom": "0" }}>
                   <thead>
                     <tr>
-                      <th>Name</th>
-                      <th>Port</th>
-                      <th>Protocol</th>
+                      <th>{t("Name")}</th>
+                      <th>{t("Port")}</th>
+                      <th>{t("Protocol")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4539,14 +4540,14 @@ spec:
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn" onClick={() => setTraefikInfoOpen(false)}>Close</button>
+              <button class="btn" onClick={() => setTraefikInfoOpen(false)}>{t("Close")}</button>
               <button
                 class="btn btn-primary"
                 style={{ "font-size": "12px" }}
                 onClick={openTraefikDashboard}
                 disabled={traefikForwarding()}
               >
-                {traefikForwarding() ? "Connecting..." : "Open Dashboard"}
+                {traefikForwarding() ? t("Connecting...") : t("Open Dashboard")}
               </button>
             </div>
           </div>

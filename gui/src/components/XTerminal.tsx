@@ -1,4 +1,5 @@
 import { createSignal, onMount, onCleanup } from "solid-js";
+import { t } from "../lib/i18n";
 import { Terminal } from "@xterm/xterm";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import { FitAddon } from "@xterm/addon-fit";
@@ -52,7 +53,7 @@ export default function XTerminal(props: XTerminalProps) {
       if (!backpressureWarned) {
         backpressureWarned = true;
         showToast(
-          "Terminal is overloaded — dropping input. Wait for the remote end to catch up.",
+          t("Terminal is overloaded — dropping input. Wait for the remote end to catch up."),
           "error",
         );
         // Reset the flag once the buffer drains enough to accept again.
@@ -235,9 +236,9 @@ export default function XTerminal(props: XTerminalProps) {
         </div>
         <div class="log-header-right">
           <div style={{ display: "flex", "align-items": "center", gap: "1px", background: "#21262d", "border-radius": "4px", padding: "0 2px" }}>
-            <button class="action-icon" onClick={() => changeFontSize(-1)} title="Decrease font size" style={{ "font-size": "14px", "font-weight": "700", width: "24px" }}>&minus;</button>
+            <button class="action-icon" onClick={() => changeFontSize(-1)} title={t("Decrease font size")} style={{ "font-size": "14px", "font-weight": "700", width: "24px" }}>&minus;</button>
             <span style={{ "font-size": "10px", color: "#8b949e", "min-width": "24px", "text-align": "center" }}>{fontSize()}</span>
-            <button class="action-icon" onClick={() => changeFontSize(1)} title="Increase font size" style={{ "font-size": "14px", "font-weight": "700", width: "24px" }}>+</button>
+            <button class="action-icon" onClick={() => changeFontSize(1)} title={t("Increase font size")} style={{ "font-size": "14px", "font-weight": "700", width: "24px" }}>+</button>
           </div>
         </div>
       </div>

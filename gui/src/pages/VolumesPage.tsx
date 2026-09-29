@@ -1,4 +1,5 @@
 import { createSignal, onMount, For, Show } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import type { Volume } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
@@ -59,15 +60,15 @@ export default function VolumesPage(props: VolumesPageProps) {
 
   const removeVolume = async (name: string, e: MouseEvent) => {
     e.stopPropagation();
-    if (!await confirmDanger("Remove Volume", `Remove volume "${name}"? This will permanently delete the volume data.`)) return;
+    if (!await confirmDanger(t("Remove Volume"), t("Remove volume \"{name}\"? This will permanently delete the volume data.", { name }))) return;
     setDeletingName(name);
     try {
       await invoke("remove_volume", { name });
-      showToast(`Volume "${name}" removed`, "success");
+      showToast(t("Volume \"{name}\" removed", { name }), "success");
       await refresh();
     } catch (err) {
       logError(`Failed to remove volume: ${err}`, `Volume "${name}"`);
-      showToast(`Failed to remove volume: ${err}`, "error");
+      showToast(t("Failed to remove volume: {error}", { error: String(err) }), "error");
     } finally {
       setDeletingName(null);
     }
@@ -81,12 +82,12 @@ export default function VolumesPage(props: VolumesPageProps) {
     try {
       const labelLines = createLabels().split("\n").map(l => l.trim()).filter(l => l.includes("="));
       await invoke("create_volume", { name, driver: createDriver().trim() || null, labels: labelLines.length > 0 ? labelLines : null });
-      showToast(`Volume "${name}" created`, "success");
+      showToast(t("Volume \"{name}\" created", { name }), "success");
       setCreateName(""); setCreateDriver("local"); setCreateLabels(""); setShowCreate(false);
       await refresh();
     } catch (err) {
       logError(`Failed to create volume: ${err}`, `Volume "${name}"`);
-      showToast(`Failed to create volume: ${err}`, "error");
+      showToast(t("Failed to create volume: {error}", { error: String(err) }), "error");
     }
     setCreating(false);
   };
@@ -101,8 +102,8 @@ export default function VolumesPage(props: VolumesPageProps) {
           </span>
         </h1>
         <div class="page-actions">
-          <button class="btn btn-primary" onClick={() => setShowCreate(true)}>Create</button>
-          <button class="btn" onClick={refresh}>Refresh</button>
+          <button class="btn btn-primary" onClick={() => setShowCreate(true)}>{t("Create")}</button>
+          <button class="btn" onClick={refresh}>{t("Refresh")}</button>
         </div>
       </div>
 
@@ -110,7 +111,7 @@ export default function VolumesPage(props: VolumesPageProps) {
         <Show when={loaded()} fallback={
           <table class="table">
             <thead>
-              <tr><th>Name</th><th>Driver</th><th>Size</th><th>Created</th><th>Actions</th></tr>
+              <tr><th>{t("Name")}</th><th>{t("Driver")}</th><th>{t("Size")}</th><th>{t("Created")}</th><th>{t("Actions")}</th></tr>
             </thead>
             <tbody>
               <SkeletonRow columns={5} />
@@ -122,8 +123,8 @@ export default function VolumesPage(props: VolumesPageProps) {
         }>
           <div class="empty">
             <div class="empty-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></div>
-            <p class="empty-title">No volumes</p>
-            <p>Volumes are created automatically when containers need persistent storage, or create one manually above.</p>
+            <p class="empty-title">{t("No volumes")}</p>
+            <p>{t("Volumes are created automatically when containers need persistent storage, or create one manually above.")}</p>
           </div>
         </Show>
       }>
@@ -134,7 +135,7 @@ export default function VolumesPage(props: VolumesPageProps) {
               <SortableHeader label="Driver" field="driver" currentSort={sortField()} currentDirection={sortDir()} onSort={toggleSort} />
               <SortableHeader label="Size" field="size" currentSort={sortField()} currentDirection={sortDir()} onSort={toggleSort} />
               <SortableHeader label="Created" field="created" currentSort={sortField()} currentDirection={sortDir()} onSort={toggleSort} />
-              <th style={{ "text-align": "right" }}>Actions</th>
+              <th style={{ "text-align": "right" }}>{t("Actions")}</th>
             </tr>
           </thead>
           <tbody>
@@ -158,13 +159,13 @@ export default function VolumesPage(props: VolumesPageProps) {
                     <Show
                       when={deletingName() === v.name}
                       fallback={
-                        <button class="action-icon action-icon-delete" title="Remove volume" disabled={deletingName() !== null} onClick={(e) => removeVolume(v.name, e)}>
+                        <button class="action-icon action-icon-delete" title={t("Remove volume")} disabled={deletingName() !== null} onClick={(e) => removeVolume(v.name, e)}>
                           {"\uD83D\uDDD1"}
                         </button>
                       }
                     >
-                      <span title="Removing volume..." style={{ display: "inline-flex", "align-items": "center", gap: "6px", color: "#8b949e", "font-size": "12px", "justify-content": "flex-end" }}>
-                        <Spinner size={12} /> Removing...
+                      <span title={t("Removing volume...")} style={{ display: "inline-flex", "align-items": "center", gap: "6px", color: "#8b949e", "font-size": "12px", "justify-content": "flex-end" }}>
+                        <Spinner size={12} /> {t("Removing...")}
                       </span>
                     </Show>
                   </td>
@@ -179,29 +180,29 @@ export default function VolumesPage(props: VolumesPageProps) {
         <div class="modal-overlay" onMouseDown={(e) => { (e.currentTarget as any).__mdOverlay = (e.target as HTMLElement).classList.contains("modal-overlay"); }} onClick={(e) => { if ((e.currentTarget as any).__mdOverlay && (e.target as HTMLElement).classList.contains("modal-overlay")) setShowCreate(false); (e.currentTarget as any).__mdOverlay = false; }}>
           <div class="modal-dialog">
             <div class="modal-header">
-              <h2 class="modal-title">Create Volume</h2>
+              <h2 class="modal-title">{t("Create Volume")}</h2>
               <button class="modal-close" onClick={() => setShowCreate(false)}>{"\u00d7"}</button>
             </div>
             <form onSubmit={handleCreate}>
               <div class="modal-body">
                 <div class="form-group">
-                  <label class="form-label">Name <span style={{ color: "#f85149" }}>*</span></label>
+                  <label class="form-label">{t("Name")} <span style={{ color: "#f85149" }}>*</span></label>
                   <input class="form-input" type="text" placeholder="my-volume" value={createName()} onInput={(e) => setCreateName(e.currentTarget.value)} autofocus />
                 </div>
                 <div class="form-group">
-                  <label class="form-label">Driver</label>
+                  <label class="form-label">{t("Driver")}</label>
                   <input class="form-input" type="text" placeholder="local" value={createDriver()} onInput={(e) => setCreateDriver(e.currentTarget.value)} />
                 </div>
                 <div class="form-group">
-                  <label class="form-label">Labels</label>
+                  <label class="form-label">{t("Labels")}</label>
                   <textarea class="form-textarea mono" placeholder={"key=value\nenvironment=production"} value={createLabels()} onInput={(e) => setCreateLabels(e.currentTarget.value)} rows={2} />
-                  <span class="form-hint">key=value, one per line</span>
+                  <span class="form-hint">{t("key=value, one per line")}</span>
                 </div>
               </div>
               <div class="modal-footer">
-                <button type="button" class="btn" onClick={() => setShowCreate(false)} disabled={creating()}>Cancel</button>
+                <button type="button" class="btn" onClick={() => setShowCreate(false)} disabled={creating()}>{t('Cancel')}</button>
                 <button type="submit" class="btn btn-primary" disabled={creating() || !createName().trim()}>
-                  {creating() ? "Creating..." : "Create"}
+                  {creating() ? t("Creating...") : t("Create")}
                 </button>
               </div>
             </form>

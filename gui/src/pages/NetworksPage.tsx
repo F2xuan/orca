@@ -1,4 +1,5 @@
 import { createSignal, onMount, For, Index, Show, untrack } from "solid-js";
+import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import type { Network } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
@@ -69,14 +70,14 @@ export default function NetworksPage() {
 
   const removeNetwork = async (name: string, e: MouseEvent) => {
     e.stopPropagation();
-    if (!await confirmDanger("Remove Network", `Remove network "${name}"?`)) return;
+    if (!await confirmDanger(t("Remove Network"), t("Remove network \"{name}\"?", { name }))) return;
     try {
       await invoke("remove_network", { name });
-      showToast(`Network "${name}" removed`, "success");
+      showToast(t("Network \"{name}\" removed", { name }), "success");
       await refresh();
     } catch (err) {
       logError(`Failed to remove network: ${err}`, `Network "${name}"`);
-      showToast(`Failed to remove network: ${err}`, "error");
+      showToast(t("Failed to remove network: {error}", { error: String(err) }), "error");
     }
   };
 
@@ -91,7 +92,7 @@ export default function NetworksPage() {
         name,
         driver: createDriver().trim() || null,
       });
-      showToast(`Network "${name}" created`, "success");
+      showToast(t("Network \"{name}\" created", { name }), "success");
       setCreateName("");
       setCreateDriver("bridge");
       setShowCreate(false);
@@ -99,7 +100,7 @@ export default function NetworksPage() {
       if (topologyView()) refreshTopology();
     } catch (err) {
       logError(`Failed to create network: ${err}`, `Network "${name}", driver "${createDriver()}"`);
-      showToast(`Failed to create network: ${err}`, "error");
+      showToast(t("Failed to create network: {error}", { error: String(err) }), "error");
     }
     setCreating(false);
   };
@@ -180,18 +181,18 @@ export default function NetworksPage() {
               color: topologyView() ? "#fff" : undefined,
               "border-color": topologyView() ? "#1f6feb" : undefined,
             }}
-            title="Toggle topology view"
+            title={t("Toggle topology view")}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style={{ "margin-right": "4px", "vertical-align": "-2px" }}>
               <circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/>
               <line x1="12" y1="7" x2="12" y2="12"/><path d="M12 12L5 17"/><path d="M12 12l7 5"/>
             </svg>
-            Topology
+            {t("Topology")}
           </button>
           <button class="btn btn-primary" onClick={() => setShowCreate(true)}>
-            Create
+            {t("Create")}
           </button>
-          <button class="btn" onClick={() => { refresh(); if (topologyView()) refreshTopology(); }}>Refresh</button>
+          <button class="btn" onClick={() => { refresh(); if (topologyView()) refreshTopology(); }}>{t("Refresh")}</button>
         </div>
       </div>
 
@@ -202,7 +203,7 @@ export default function NetworksPage() {
             <Show when={loaded()} fallback={
               <table class="table">
                 <thead>
-                  <tr><th>Name</th><th>ID</th><th>Driver</th><th>Subnet</th><th>Gateway</th><th>Actions</th></tr>
+                  <tr><th>{t("Name")}</th><th>ID</th><th>{t("Driver")}</th><th>{t("Subnet")}</th><th>{t("Gateway")}</th><th>{t("Actions")}</th></tr>
                 </thead>
                 <tbody>
                   <SkeletonRow columns={6} />
@@ -214,10 +215,10 @@ export default function NetworksPage() {
             }>
               <div class="empty">
                 <div class="empty-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="12" y2="12"/><path d="M12 12L5 17"/><path d="M12 12l7 5"/></svg></div>
-                <p class="empty-title">No custom networks</p>
-                <p>Default networks are managed by Docker. Create a custom network for container isolation.</p>
+                <p class="empty-title">{t("No custom networks")}</p>
+                <p>{t("Default networks are managed by Docker. Create a custom network for container isolation.")}</p>
                 <div class="empty-actions">
-                  <button class="btn btn-primary" onClick={() => setShowCreate(true)}>Create Network</button>
+                  <button class="btn btn-primary" onClick={() => setShowCreate(true)}>{t("Create Network")}</button>
                 </div>
               </div>
             </Show>
@@ -230,8 +231,8 @@ export default function NetworksPage() {
                 <th>ID</th>
                 <SortableHeader label="Driver" field="driver" currentSort={sortField()} currentDirection={sortDir()} onSort={toggleSort} />
                 <SortableHeader label="Subnet" field="subnet" currentSort={sortField()} currentDirection={sortDir()} onSort={toggleSort} />
-                <th>Gateway</th>
-                <th style={{ "text-align": "right" }}>Actions</th>
+                <th>{t("Gateway")}</th>
+                <th style={{ "text-align": "right" }}>{t("Actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -255,7 +256,7 @@ export default function NetworksPage() {
                       <Show when={!isDefaultNetwork(n.name)}>
                         <button
                           class="action-icon action-icon-delete"
-                          title="Remove network"
+                          title={t("Remove network")}
                           onClick={(e) => removeNetwork(n.name, e)}
                           style={{ color: "#f85149" }}
                         ><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
@@ -267,27 +268,27 @@ export default function NetworksPage() {
                       <td colspan="6" style={{ padding: "12px 16px 12px 36px", background: "#161b22", "border-top": "none" }}>
                         <div style={{ display: "grid", "grid-template-columns": "repeat(3, 1fr)", gap: "12px", "font-size": "13px" }}>
                           <div>
-                            <span style={{ color: "#8b949e" }}>Full ID</span>
+                            <span style={{ color: "#8b949e" }}>{t("Full ID")}</span>
                             <div class="mono" style={{ "word-break": "break-all", "margin-top": "2px" }}>{n.id}</div>
                           </div>
                           <div>
-                            <span style={{ color: "#8b949e" }}>Subnet</span>
+                            <span style={{ color: "#8b949e" }}>{t("Subnet")}</span>
                             <div class="mono" style={{ "margin-top": "2px" }}>{n.subnet || "None"}</div>
                           </div>
                           <div>
-                            <span style={{ color: "#8b949e" }}>Gateway</span>
+                            <span style={{ color: "#8b949e" }}>{t("Gateway")}</span>
                             <div class="mono" style={{ "margin-top": "2px" }}>{n.gateway || "None"}</div>
                           </div>
                           <div>
-                            <span style={{ color: "#8b949e" }}>Driver</span>
+                            <span style={{ color: "#8b949e" }}>{t("Driver")}</span>
                             <div style={{ "margin-top": "2px" }}>{n.driver || "none"}</div>
                           </div>
                           <div>
-                            <span style={{ color: "#8b949e" }}>Scope</span>
-                            <div style={{ "margin-top": "2px" }}>{isDefaultNetwork(n.name) ? "Default" : "Custom"}</div>
+                            <span style={{ color: "#8b949e" }}>{t("Scope")}</span>
+                            <div style={{ "margin-top": "2px" }}>{isDefaultNetwork(n.name) ? t("Default") : t("Custom")}</div>
                           </div>
                           <div>
-                            <span style={{ color: "#8b949e" }}>Labels</span>
+                            <span style={{ color: "#8b949e" }}>{t("Labels")}</span>
                             <div class="mono" style={{ "margin-top": "2px" }}>
                               {Object.keys(n.labels).length > 0
                                 ? Object.entries(n.labels).map(([k, v]) => `${k}=${v}`).join(", ")
@@ -309,7 +310,7 @@ export default function NetworksPage() {
           <Show when={topology().length > 0} fallback={
             <div class="empty">
               <div class="empty-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="12" y2="12"/><path d="M12 12L5 17"/><path d="M12 12l7 5"/></svg></div>
-              <p class="empty-title">Loading topology...</p>
+              <p class="empty-title">{t("Loading topology...")}</p>
             </div>
           }>
             <svg
@@ -435,7 +436,7 @@ export default function NetworksPage() {
         <div class="modal-overlay" onMouseDown={handleOverlayMouseDown} onClick={handleOverlayClick}>
           <div class="modal-dialog">
             <div class="modal-header">
-              <h2 class="modal-title">Create Network</h2>
+              <h2 class="modal-title">{t("Create Network")}</h2>
               <button class="modal-close" onClick={() => setShowCreate(false)}>
                 {"\u00d7"}
               </button>
@@ -457,7 +458,7 @@ export default function NetworksPage() {
                 </div>
 
                 <div class="form-group">
-                  <label class="form-label">Driver</label>
+                  <label class="form-label">{t("Driver")}</label>
                   <Dropdown
                     value={createDriver()}
                     options={[
@@ -481,7 +482,7 @@ export default function NetworksPage() {
                   class="btn btn-primary"
                   disabled={creating() || !createName().trim()}
                 >
-                  {creating() ? "Creating..." : "Create"}
+                  {creating() ? t("Creating...") : t("Create")}
                 </button>
               </div>
             </form>
