@@ -831,12 +831,6 @@ git push && git push --tags
 
 开发环境配置与规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-## 软件包托管
-
-[![Hosted By: Cloudsmith](https://img.shields.io/badge/OSS%20hosting%20by-cloudsmith-blue?logo=cloudsmith&style=flat-square)](https://cloudsmith.com)
-
-软件包仓库托管由 [Cloudsmith](https://cloudsmith.com) 慷慨提供。Cloudsmith 是唯一完全托管、云原生的通用包管理解决方案，帮助你的组织以任何格式、到任何地方，安全地创建、存储和共享软件包。
-
 ## 许可证
 
 [MIT](LICENSE)
