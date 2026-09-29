@@ -13,8 +13,8 @@
   <strong>简体中文</strong> | <a href="./README.md">English</a>
 </p>
 
-> [!IMPORTANT]
-> **关于本仓库（Fork 说明）**：本仓库是 [edvin/orca](https://github.com/edvin/orca) 的 fork。原项目是一个开源的容器管理桌面应用，内置 AI 助手。本 fork 在上游基础上为桌面应用增加了**简体中文本地化（i18n）**，并提供中文文档。原项目的全部成果属于原作者 [@edvin](https://github.com/edvin) 及上游贡献者，在此致谢。官方发布版本与 Issue 请见[上游仓库](https://github.com/edvin/orca)。由于 fork 无法使用官方签名密钥，本 fork 不发布安装包——请从上游 [Releases](https://github.com/edvin/orca/releases) 页面下载官方构建版本。
+> [!NOTE]
+> **简体中文文档**：本 README 由 [English README](./README.md) 翻译而来，为 Orca Desktop 提供中文说明。翻译可能滞后于英文原文，如有不一致请以英文版为准；欢迎通过 Issue 或 PR 改进翻译质量。
 
 <p align="center">
   <img src="screenshots/01-dashboard.png" alt="Orca Desktop 仪表盘" width="800" />
@@ -29,12 +29,12 @@
   <a href="https://orca-desktop.com">官网</a> · <a href="https://github.com/edvin/orca/releases/latest">下载</a> · 开源项目，基于 Rust、Tauri 与 SolidJS 构建。
 </p>
 
-## 本 Fork 的改动
+## 简体中文本地化
 
-- **简体中文本地化**：内置 i18n 框架（`gui/src/lib/i18n.ts`）与中文语言包 `gui/src/lib/locales/zh-CN.ts`（1600+ 词条），覆盖全部页面与组件
+- **内置 i18n 框架**：`gui/src/lib/i18n.ts`，中文语言包位于 `gui/src/lib/locales/zh-CN.ts`（1600+ 词条），覆盖全部页面、组件、对话框与提示
 - **语言切换**：`设置 → 偏好设置` 下拉选择，或在命令面板（Ctrl/Cmd+K）中搜索 "Language"；切换即时生效并持久化（`orca.locale`）
 - **回退机制**：语言包缺失的词条自动回退显示英文，不会出现空白或报错
-- 其余功能与上游完全一致
+- 默认语言跟随系统 `LANG` 环境变量自动检测
 
 ## 功能特性
 
@@ -827,7 +827,7 @@ git push && git push --tags
 
 ## 参与贡献
 
-欢迎贡献！（本 fork 与上游一致）请先开 issue 讨论你想要修改的内容。
+欢迎贡献！请先开 issue 讨论你想要修改的内容。
 
 开发环境配置与规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
@@ -844,5 +844,5 @@ git push && git push --tags
 ---
 
 <p align="center">
-  中文文档由 <a href="https://github.com/F2xuan">F2xuan</a> 维护 · 基于 <a href="https://github.com/edvin/orca">edvin/orca</a> · <a href="./README.md">English README</a>
+  中文文档由 <a href="https://github.com/F2xuan">F2xuan</a> 维护 · <a href="./README.md">English README</a>
 </p>
