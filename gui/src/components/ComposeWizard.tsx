@@ -330,7 +330,17 @@ export default function ComposeWizard(props: ComposeWizardProps) {
       const filePath = `${dir}/docker-compose.yml`;
       const yamlContent = generatedYaml();
       await invoke("save_compose_file", { path: filePath, content: yamlContent });
-      await invoke("compose_deploy_path", { path: dir });
+      const result = (await invoke("compose_deploy_path", { path: dir })) as any;
+      // `compose up` can exit non-zero (image pull failure, port conflict, ...)
+      // even when the HTTP call succeeds. Do not report success unless it did.
+      if (result && typeof result.exit_code === "number" && result.exit_code !== 0) {
+        const detail =
+          String(result.stderr || "")
+            .split("\n")
+            .filter((l) => l.trim())
+            .pop() || t("Unknown error");
+        throw new Error(t("Compose exited with {code}: {error}", { code: result.exit_code, error: detail }));
+      }
       showToast(t("Stack \"{name}\" deployed!", { name }), "success");
       props.onClose();
       props.onDeployed?.();

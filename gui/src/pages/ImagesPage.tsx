@@ -2,7 +2,7 @@ import { createSignal, createEffect, onMount, onCleanup, For, Index, Show, untra
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Image, ImageSearchResult, ScanResult } from "../lib/types";
+import type { Image, ImageSearchResult, ImageUse, ScanResult } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
 import { formatBytes, formatTimestamp, shortId } from "../lib/format";
 import { showToast } from "../components/Toast";
@@ -23,9 +23,92 @@ interface ImagesPageProps {
   onNavigate?: (target: string) => void;
 }
 
+/**
+ * Whether an image is in use, as a coloured dot — the Docker Desktop
+ * affordance.
+ *
+ * Three states, deliberately distinct:
+ * - **green** — used by at least one *running* container
+ * - **amber, hollow** — referenced only by stopped containers (still counts:
+ *   a stopped container keeps the reference and blocks image deletion)
+ * - **grey, hollow, "?"** — unknown. The daemon returns `undefined` when it
+ *   could not read the container list; showing nothing there would claim the
+ *   image is unused, which is exactly the kind of lie this UI must avoid.
+ *
+ * Unused images render nothing, like Docker Desktop.
+ */
+function UsageBadge(props: { used: ImageUse[] | undefined }) {
+  const state = () => {
+    const used = props.used;
+    if (used === undefined) {
+      return {
+        color: "#6e7681",
+        hollow: true,
+        label: "?",
+        title: t("Could not determine whether this image is in use."),
+      };
+    }
+    const running = used.filter((c) => c.running);
+    const names = used.map((c) => c.name).join(", ");
+    if (running.length > 0) {
+      return {
+        color: "#3fb950",
+        hollow: false,
+        label: String(running.length),
+        title: t("In use by {count} running container(s): {names}", {
+          count: running.length,
+          names,
+        }),
+      };
+    }
+    if (used.length > 0) {
+      return {
+        color: "#d29922",
+        hollow: true,
+        label: String(used.length),
+        title: t("Used only by stopped container(s): {names}", { names }),
+      };
+    }
+    return null;
+  };
+
+  return (
+    <Show when={state()}>
+      {(s) => (
+        <span
+          title={s().title}
+          style={{
+            display: "inline-flex",
+            "align-items": "center",
+            gap: "4px",
+            "flex-shrink": "0",
+            "font-size": "11px",
+            color: s().color,
+            cursor: "help",
+          }}
+        >
+          <span
+            style={{
+              width: "8px",
+              height: "8px",
+              "border-radius": "50%",
+              background: s().hollow ? "transparent" : s().color,
+              border: `2px solid ${s().color}`,
+              "box-sizing": "border-box",
+            }}
+          />
+          <span class="mono">{s().label}</span>
+        </span>
+      )}
+    </Show>
+  );
+}
+
 export default function ImagesPage(props: ImagesPageProps) {
   const [images, setImages] = createSignal<Image[]>([]);
   const [search, setSearch] = createSignal("");
+  /** Docker Desktop-style "in use" filter. */
+  const [inUseOnly, setInUseOnly] = createSignal(false);
   const [pullRef, setPullRef] = createSignal("");
   const [pulling, setPulling] = createSignal(false);
   const [pullStatus, setPullStatus] = createSignal("");
@@ -102,12 +185,21 @@ export default function ImagesPage(props: ImagesPageProps) {
   const [saveTarPath, setSaveTarPath] = createSignal("");
   const [savingTar, setSavingTar] = createSignal(false);
 
+  /// Set when the *first* load fails. The skeleton fallback keys off
+  /// `lastUpdated() !== null`, so without this a failed first load left five
+  /// skeleton rows on screen forever with no way to retry.
+  const [loadError, setLoadError] = createSignal<string | null>(null);
+
   const refresh = async () => {
     try {
       const result = (await invoke("list_images")) as Image[];
       setImages(result);
       setLastUpdated(new Date());
-    } catch {
+      setLoadError(null);
+    } catch (e) {
+      logError(`Failed to load images: ${e}`, "Images");
+      // Keep any previously loaded list; only flag it when we have nothing.
+      if (lastUpdated() === null) setLoadError(String(e));
     }
   };
 
@@ -204,6 +296,11 @@ export default function ImagesPage(props: ImagesPageProps) {
           img.id.includes(q)
       );
     }
+    if (inUseOnly()) {
+      // Includes images held only by stopped containers, matching the amber
+      // badge — they still can't be removed.
+      list = list.filter((img) => (img.used_by?.length ?? 0) > 0);
+    }
     return sortFn(list, (item, field) => {
       switch (field) {
         case "tag": return item.repo_tags[0] || "";
@@ -213,6 +310,10 @@ export default function ImagesPage(props: ImagesPageProps) {
       }
     });
   };
+
+  /** Images referenced by at least one container (running or stopped). */
+  const inUseCount = () =>
+    images().filter((img) => (img.used_by?.length ?? 0) > 0).length;
 
   const toggleSelect = (id: string, e: MouseEvent) => {
     e.stopPropagation();
@@ -823,6 +924,12 @@ export default function ImagesPage(props: ImagesPageProps) {
           {t("Images")}
           <span style={{ "font-size": "13px", color: "#8b949e", "font-weight": "400", "margin-left": "8px" }}>
             {filtered().length} &middot; {formatBytes(totalSize())}
+            <Show when={inUseCount() > 0}>
+              {" "}&middot;{" "}
+              <span style={{ color: "#3fb950" }}>
+                {t("{count} in use", { count: inUseCount() })}
+              </span>
+            </Show>
           </span>
           <LastUpdated timestamp={lastUpdated()} />
         </h1>
@@ -834,6 +941,14 @@ export default function ImagesPage(props: ImagesPageProps) {
             value={search()}
             onInput={(e) => setSearch(e.currentTarget.value)}
           />
+          <button
+            class="btn"
+            classList={{ "btn-primary": inUseOnly() }}
+            title={t("Show only images referenced by a container")}
+            onClick={() => setInUseOnly(!inUseOnly())}
+          >
+            {t("In use only")}
+          </button>
           <button class="btn" onClick={() => setShowPull(true)}>
             {t("Pull")}
           </button>
@@ -1071,18 +1186,28 @@ export default function ImagesPage(props: ImagesPageProps) {
         when={filtered().length > 0}
         fallback={
           <Show when={lastUpdated() !== null} fallback={
-            <table class="table">
-              <thead>
-                <tr><th /><th>{t("Repository / Tag")}</th><th>ID</th><th>{t("Size")}</th><th>{t("Created")}</th><th>{t("Actions")}</th></tr>
-              </thead>
-              <tbody>
-                <SkeletonRow columns={6} />
-                <SkeletonRow columns={6} />
-                <SkeletonRow columns={6} />
-                <SkeletonRow columns={6} />
-                <SkeletonRow columns={6} />
-              </tbody>
-            </table>
+            <Show when={loadError()} fallback={
+              <table class="table">
+                <thead>
+                  <tr><th /><th>{t("Repository / Tag")}</th><th>ID</th><th>{t("Size")}</th><th>{t("Created")}</th><th>{t("Actions")}</th></tr>
+                </thead>
+                <tbody>
+                  <SkeletonRow columns={6} />
+                  <SkeletonRow columns={6} />
+                  <SkeletonRow columns={6} />
+                  <SkeletonRow columns={6} />
+                  <SkeletonRow columns={6} />
+                </tbody>
+              </table>
+            }>
+              <div class="empty">
+                <p class="empty-title">{t("Failed to load images")}</p>
+                <p class="mono" style={{ "font-size": "12px", color: "#8b949e", "word-break": "break-all" }}>{loadError()}</p>
+                <div class="empty-actions">
+                  <button class="btn btn-primary" onClick={() => void refresh()}>{t("Retry")}</button>
+                </div>
+              </div>
+            </Show>
           }>
             <div class="empty">
               <p class="empty-title">{t("No images found")}</p>
@@ -1133,21 +1258,43 @@ export default function ImagesPage(props: ImagesPageProps) {
                       />
                     </td>
                     <td>
-                      <Show
-                        when={img.repo_tags.length > 0}
-                        fallback={
-                          <span style={{ color: "#8b949e" }}>&lt;untagged&gt;</span>
-                        }
-                      >
-                        <For each={img.repo_tags}>
-                          {(tag) => (
-                            <div class="mono" style={{ "line-height": "1.6", display: "flex", "align-items": "center", gap: "4px" }}>
-                              {tag}
-                              <CopyButton text={tag} label={t("Copy image tag")} />
-                            </div>
-                          )}
-                        </For>
-                      </Show>
+                      <div style={{ display: "flex", "align-items": "flex-start", gap: "8px" }}>
+                        {/* Fixed gutter so the dots line up down the column, and
+                            rows without a badge don't shift. */}
+                        <div style={{
+                          // Size the gutter to exactly one tag line (`1.6em`) and centre the
+                          // dot in it. A fixed pixel padding made the dot sit slightly below
+                          // the first tag.
+                          "min-width": "16px",
+                          height: "1.6em",
+                          display: "flex",
+                          "align-items": "center",
+                          "flex-shrink": "0",
+                          // Optical nudge, measured against a real render: a circle has no
+                          // descender, so centring it in the line box leaves it ~1.5px below
+                          // the tag text it labels.
+                          "margin-top": "-1.5px",
+                        }}>
+                          <UsageBadge used={img.used_by} />
+                        </div>
+                        <div style={{ "min-width": "0", flex: "1" }}>
+                          <Show
+                            when={img.repo_tags.length > 0}
+                            fallback={
+                              <span style={{ color: "#8b949e" }}>&lt;untagged&gt;</span>
+                            }
+                          >
+                            <For each={img.repo_tags}>
+                              {(tag) => (
+                                <div class="mono" style={{ "line-height": "1.6", display: "flex", "align-items": "center", gap: "4px" }}>
+                                  {tag}
+                                  <CopyButton text={tag} label={t("Copy image tag")} />
+                                </div>
+                              )}
+                            </For>
+                          </Show>
+                        </div>
+                      </div>
                     </td>
                     <td class="mono" style={{ color: "#8b949e" }}>
                       <span style={{ display: "inline-flex", "align-items": "center", gap: "4px" }}>
@@ -1271,6 +1418,44 @@ export default function ImagesPage(props: ImagesPageProps) {
                                         onClick={(e) => { e.stopPropagation(); setLayersDialogImage(img); }}>
                                         {t("View Layers")}
                                       </button>
+                                    </Show>
+                                  </div>
+
+                                  <div class="card-label">{t("In use")}</div>
+                                  <div class="card-value">
+                                    <Show
+                                      when={img.used_by}
+                                      fallback={<span style={{ color: "#8b949e" }}>{t("Unknown")}</span>}
+                                    >
+                                      {(used) => (
+                                        <Show
+                                          when={used().length > 0}
+                                          fallback={
+                                            <span style={{ color: "#8b949e" }}>
+                                              {t("Not used by any container")}
+                                            </span>
+                                          }
+                                        >
+                                          <div style={{ display: "flex", "flex-direction": "column", gap: "2px" }}>
+                                            <For each={used()}>
+                                              {(u) => (
+                                                <span style={{ display: "inline-flex", "align-items": "center", gap: "6px", "font-size": "12px" }}>
+                                                  <span style={{
+                                                    width: "7px", height: "7px", "border-radius": "50%",
+                                                    background: u.running ? "#3fb950" : "transparent",
+                                                    border: `2px solid ${u.running ? "#3fb950" : "#d29922"}`,
+                                                    "box-sizing": "border-box",
+                                                  }} />
+                                                  <span class="mono">{u.name}</span>
+                                                  <span style={{ color: "#8b949e" }}>
+                                                    {u.running ? t("running") : t("stopped")}
+                                                  </span>
+                                                </span>
+                                              )}
+                                            </For>
+                                          </div>
+                                        </Show>
+                                      )}
                                     </Show>
                                   </div>
                                 </div>

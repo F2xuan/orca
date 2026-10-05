@@ -404,7 +404,9 @@ pub async fn execute_tool(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("orca-{}", template.id));
+                .unwrap_or_else(|| crate::api::default_deploy_name(&template.id));
+            let volume_tag = crate::api::deploy_volume_tag(&template.id, &container_name);
+            let template_volumes = crate::api::template_named_volumes(&template.default_volumes);
 
             let ports_str: Vec<String> = arguments
                 .get("ports")
@@ -431,32 +433,23 @@ pub async fn execute_tool(
                 .get("env")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_else(|| template.default_env.clone());
+            // The template's values already carry the generated secret; this only
+            // covers a caller that passed the raw placeholder through the tool.
+            let mut fallback: Option<String> = None;
             let env: HashMap<String, String> = env_list
                 .iter()
                 .filter_map(|s| {
-                    let mut parts = s.splitn(2, '=');
-                    let key = parts.next()?.to_string();
-                    let val = parts.next().unwrap_or("").to_string();
-                    Some((key, val))
+                    let (key, raw) = s.split_once('=')?;
+                    Some((
+                        key.trim().to_string(),
+                        crate::api::resolve_placeholder(raw, &mut fallback),
+                    ))
                 })
                 .collect();
 
             let vol_list = template.default_volumes.clone();
-            let volumes: Vec<VolumeMount> = vol_list
-                .iter()
-                .filter_map(|s| {
-                    let parts: Vec<&str> = s.splitn(2, ':').collect();
-                    if parts.len() == 2 {
-                        Some(VolumeMount {
-                            source: parts[0].to_string(),
-                            target: parts[1].to_string(),
-                            read_only: false,
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let volumes: Vec<VolumeMount> =
+                crate::api::deploy_volume_mounts(&vol_list, &volume_tag, &template_volumes);
 
             let opts = ContainerCreateOpts {
                 image: template.image.clone(),
@@ -495,7 +488,7 @@ pub async fn execute_tool(
             Ok(json!({
                 "id": container_id,
                 "name": container_name,
-                "notes": template.notes,
+                "notes": crate::api::resolve_placeholder(&template.notes, &mut fallback),
             }))
         }
 

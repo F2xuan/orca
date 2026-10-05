@@ -186,6 +186,11 @@ export default function KubernetesPage() {
     if (setupLogRef) setupLogRef.scrollTop = setupLogRef.scrollHeight;
   });
 
+  /// Set when `k8s_status` fails outright. Without it a failed first load left
+  /// `status()` null and the page rendered "Loading cluster status..." forever —
+  /// a state the user could not escape without restarting the app.
+  const [statusError, setStatusError] = createSignal<string | null>(null);
+
   const refreshStatus = async () => {
     try {
       const s = (await invoke("k8s_status")) as ClusterStatus;
@@ -225,7 +230,11 @@ export default function KubernetesPage() {
           setTraefikIntegrationMode(null);
         }
       }
-    } catch {
+    } catch (e) {
+      logError(`Failed to load cluster status: ${e}`, "Kubernetes");
+      // Only surface it when we have nothing to show; a failed *refresh* must
+      // not blow away an already-good status.
+      if (!status()) setStatusError(String(e));
     }
   };
 
@@ -1286,10 +1295,25 @@ spec:
       {/* Status loading state */}
       <Show when={!status()}>
         <div class="hero-card">
-          <div class="hero-spinner">
-            <Spinner />
-            <div style={{ color: "#8b949e", "font-size": "14px" }}>{t("Loading cluster status...")}</div>
-          </div>
+          <Show
+            when={statusError()}
+            fallback={
+              <div class="hero-spinner">
+                <Spinner />
+                <div style={{ color: "#8b949e", "font-size": "14px" }}>{t("Loading cluster status...")}</div>
+              </div>
+            }
+          >
+            <div style={{ display: "flex", "flex-direction": "column", gap: "10px", "align-items": "center" }}>
+              <div style={{ color: "#f85149", "font-size": "14px" }}>{t("Failed to load cluster status")}</div>
+              <div class="mono" style={{ color: "#8b949e", "font-size": "11px", "max-width": "520px", "word-break": "break-all", "text-align": "center" }}>
+                {statusError()}
+              </div>
+              <button class="btn btn-sm" onClick={() => { setStatusError(null); void refreshStatus(); }}>
+                {t("Retry")}
+              </button>
+            </div>
+          </Show>
         </div>
       </Show>
 

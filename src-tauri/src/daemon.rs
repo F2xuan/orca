@@ -19,28 +19,35 @@ impl DaemonManager {
     }
 
     /// Start the daemon if not already running.
-    /// If a daemon is running but has a different version, restart it.
+    /// If a daemon is running but is a different build, restart it.
     pub async fn start(&self) -> Result<(), String> {
         // Check if daemon is already responding
         if self.health_check().await {
-            // Verify version matches this app
             let expected_version = env!("CARGO_PKG_VERSION");
-            match self.daemon_version().await {
-                Some(v) if v == expected_version => {
-                    tracing::info!("Orca daemon already running (v{v})");
+            let running_version = self.daemon_version().await;
+            // The version string is not proof of the same build: a daemon
+            // rebuilt from newer source still reports it. Comparing only
+            // versions therefore keeps the *old* process alive and every backend
+            // change silently fails to take effect — a rebuild looks like a
+            // no-op. Compare the on-disk sidecar's fingerprint too.
+            let running_build = self.daemon_build().await;
+            let on_disk_build = sidecar_fingerprint();
+            let same_build = builds_match(running_build.as_deref(), on_disk_build.as_deref());
+            match running_version {
+                Some(v) if v == expected_version && same_build => {
+                    tracing::info!("Orca daemon already running (v{v}, build {})", running_build.unwrap_or_default());
                     return Ok(());
                 }
-                Some(v) => {
+                Some(v) if v != expected_version => {
                     tracing::info!("Daemon version mismatch: running v{v}, app is v{expected_version} — restarting");
-                    self.kill_existing_daemon().await;
                 }
-                None => {
+                _ => {
                     tracing::info!(
-                        "Orca daemon already running (version unknown) — restarting to ensure correct version"
+                        "Daemon build mismatch (running {running_build:?} vs on-disk {on_disk_build:?}) — restarting to pick up the current sidecar"
                     );
-                    self.kill_existing_daemon().await;
                 }
             }
+            self.kill_existing_daemon().await;
         }
 
         let daemon_path = find_daemon_binary();
@@ -151,6 +158,21 @@ impl DaemonManager {
             .ok()?;
         let json: serde_json::Value = resp.json().await.ok()?;
         json["version"].as_str().map(|s| s.to_string())
+    }
+
+    /// The build fingerprint the running daemon reports, if any.
+    ///
+    /// `None` for a daemon predating the field — which is by definition an older
+    /// build, so the caller treats it as a mismatch and restarts.
+    async fn daemon_build(&self) -> Option<String> {
+        let resp = reqwest::Client::new()
+            .get("http://127.0.0.1:9477/api/v1/health")
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+            .ok()?;
+        let json: serde_json::Value = resp.json().await.ok()?;
+        json["build"].as_str().map(|s| s.to_string())
     }
 
     async fn health_check(&self) -> bool {
@@ -268,5 +290,58 @@ fn daemon_binary_name() -> &'static str {
         "orca-daemon.exe"
     } else {
         "orca-daemon"
+    }
+}
+
+/// Fingerprint of the sidecar currently sitting on disk, in the same form the
+/// daemon reports from `/health` (see `build_fingerprint` in the daemon).
+///
+/// `None` when the binary can't be stat'd or has no mtime; the caller treats
+/// that as a mismatch and restarts, because "unknown" must not be read as
+/// "current".
+fn sidecar_fingerprint() -> Option<String> {
+    std::fs::canonicalize(find_daemon_binary())
+        .ok()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs().to_string())
+}
+
+/// Whether a running daemon is the same build as the sidecar on disk.
+///
+/// Deliberately strict: an absent fingerprint on either side is a mismatch. A
+/// needless restart costs about a second; keeping a stale daemon costs a wrong
+/// answer and makes every rebuild look like it had no effect.
+fn builds_match(running: Option<&str>, on_disk: Option<&str>) -> bool {
+    match (running, on_disk) {
+        (Some(a), Some(b)) => !a.is_empty() && a == b,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::builds_match;
+
+    #[test]
+    fn identical_fingerprints_match() {
+        assert!(builds_match(Some("1759490000"), Some("1759490000")));
+    }
+
+    #[test]
+    fn a_rebuilt_sidecar_does_not_match() {
+        // The bug this guards: same version string, newer binary on disk. The
+        // running process must be replaced.
+        assert!(!builds_match(Some("1759490000"), Some("1759499999")));
+    }
+
+    #[test]
+    fn unknown_fingerprints_are_treated_as_mismatch() {
+        assert!(!builds_match(None, Some("1759490000")));
+        assert!(!builds_match(Some("1759490000"), None));
+        assert!(!builds_match(None, None));
+        // A daemon that crashed while formatting its own fingerprint.
+        assert!(!builds_match(Some(""), Some("")));
     }
 }

@@ -53,6 +53,27 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // Normalise PATH once, before anything spawns a subprocess.
+    //
+    // The GUI is normally launched from Finder or as a login item, so it
+    // inherits launchd's minimal PATH and `docker` / `limactl` / `kubectl`
+    // (in /usr/local/bin or /opt/homebrew/bin) are not findable — every
+    // `Command::new("docker")` then fails with a bare
+    // "No such file or directory (os error 2)". Fixing it here covers every
+    // current *and future* call site, rather than sprinkling `.env("PATH", …)`
+    // at each one (only 22 of 101 sites had it, which is how this kept
+    // recurring).
+    //
+    // SAFETY: `set_var` is unsafe in edition 2024 because concurrent readers
+    // are UB. This runs at the very top of `main`, before the runtime spawns
+    // any worker that reads the environment, and the daemon is single-tenant.
+    unsafe {
+        std::env::set_var(
+            "PATH",
+            orca_backend_common::environment::extended_path(),
+        );
+    }
+
     // Install the rustls `ring` crypto provider process-wide. rustls 0.23
     // does not pick a default provider on its own — every TLS connection
     // would otherwise panic the worker thread with

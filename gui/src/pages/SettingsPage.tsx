@@ -8,9 +8,10 @@ import { logError } from "../lib/activityStore";
 import { getOllamaSetupState, getOllamaSetupStatus, isOllamaSetupRunning, updateOllamaSetup } from "../lib/ollamaSetup";
 import Spinner from "../components/Spinner";
 import Dropdown from "../components/Dropdown";
+import EngineSettings from "../components/EngineSettings";
 import { AVAILABLE_LOCALES, getLocale, setLocale, type Locale } from "../lib/i18n";
 
-type SettingsTab = "general" | "ai" | "registries" | "remote-hosts" | "auto-deploy" | "schedules" | "maintenance" | "certificates" | "privacy" | "about";
+type SettingsTab = "general" | "ai" | "registries" | "docker-engine" | "remote-hosts" | "auto-deploy" | "schedules" | "maintenance" | "certificates" | "privacy" | "about";
 
 interface SettingsPageProps {
   initialTab?: string;
@@ -323,7 +324,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     if (!server || !username || !password) return;
     try {
       await invoke("add_registry", { server, name: name || server, username, password });
-      showToast(t("Registry added"), "success");
+      showToast(t("Credential added"), "success");
       setShowAddRegistry(false);
       setRegServer("");
       setRegName("");
@@ -331,20 +332,20 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       setRegPassword("");
       await refreshRegistries();
     } catch (e) {
-      logError(`Failed to add registry: ${e}`, `Server "${server}"`);
-      showToast(t("Failed to add registry: {error}", { error: String(e) }), "error");
+      logError(`Failed to add credential: ${e}`, `Server "${server}"`);
+      showToast(t("Failed to add credential: {error}", { error: String(e) }), "error");
     }
   };
 
   const removeReg = async (server: string) => {
-    if (!await confirmDanger(t("Remove Registry"), t("Remove registry '{server}'?", { server }))) return;
+    if (!await confirmDanger(t("Remove Credential"), t("Remove the credential for '{server}'?", { server }))) return;
     try {
       await invoke("remove_registry", { server });
-      showToast(t("Registry removed"), "success");
+      showToast(t("Credential removed"), "success");
       await refreshRegistries();
     } catch (e) {
-      logError(`Failed to remove registry: ${e}`, `Server "${server}"`);
-      showToast(t("Failed to remove registry: {error}", { error: String(e) }), "error");
+      logError(`Failed to remove credential: ${e}`, `Server "${server}"`);
+      showToast(t("Failed to remove credential: {error}", { error: String(e) }), "error");
     }
   };
 
@@ -954,7 +955,8 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
       <div class="tab-bar" style={{"margin-bottom":"24px"}}>
         <button class={`tab-item ${tab() === "general" ? "active" : ""}`} onClick={() => setTab("general")}>{t("General")}</button>
         <button class={`tab-item ${tab() === "ai" ? "active" : ""}`} onClick={() => setTab("ai")}>{t("AI & Agents")}</button>
-        <button class={`tab-item ${tab() === "registries" ? "active" : ""}`} onClick={() => setTab("registries")}>{t("Registries")}</button>
+        <button class={`tab-item ${tab() === "registries" ? "active" : ""}`} onClick={() => setTab("registries")}>{t("Registry Credentials")}</button>
+        <button class={`tab-item ${tab() === "docker-engine" ? "active" : ""}`} onClick={() => setTab("docker-engine")}>{t("Docker Engine")}</button>
         <button class={`tab-item ${tab() === "remote-hosts" ? "active" : ""}`} onClick={() => setTab("remote-hosts")}>{t("Remote Hosts")}</button>
         <button class={`tab-item ${tab() === "auto-deploy" ? "active" : ""}`} onClick={() => setTab("auto-deploy")}>{t("Auto-Deploy")}</button>
         <button class={`tab-item ${tab() === "schedules" ? "active" : ""}`} onClick={() => setTab("schedules")}>{t("Schedules")}</button>
@@ -1519,10 +1521,13 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
         {/* === Registries Tab === */}
         <Show when={tab() === "registries"}>
           <div class="settings-section">
-            <h2 class="settings-section-title">{t("Container Registries")}</h2>
+            <h2 class="settings-section-title">{t("Private Registry Credentials")}</h2>
+            <div class="settings-description">
+              {t("Logins for private registries. This is not an image mirror — to speed up pulls from Docker Hub, use the Docker Engine tab.")}
+            </div>
             <div class="card">
               <Show when={registries().length > 0} fallback={
-                <div style={{ padding: "8px 0", color: "#8b949e" }}>{t("No registries configured. Add credentials for private image registries.")}</div>
+                <div style={{ padding: "8px 0", color: "#8b949e" }}>{t("No credentials configured. Add a login for a private image registry such as ghcr.io. Public images need none.")}</div>
               }>
                 <table class="table" style={{ margin: 0 }}>
                   <thead>
@@ -1543,7 +1548,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                           <td>{reg.username}</td>
                           <td style={{ color: "#8b949e" }}>{"\u2022\u2022\u2022\u2022\u2022\u2022"}</td>
                           <td style={{ "text-align": "right" }}>
-                            <button class="btn btn-sm btn-danger" onClick={() => removeReg(reg.server)} title={t("Delete registry")} style={{ color: "#f85149" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
+                            <button class="btn btn-sm btn-danger" onClick={() => removeReg(reg.server)} title={t("Delete credential")} style={{ color: "#f85149" }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>
                           </td>
                         </tr>
                       )}
@@ -1554,7 +1559,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
 
               <div style={{ "margin-top": "12px" }}>
                 <Show when={!showAddRegistry()}>
-                  <button class="btn btn-primary" onClick={() => setShowAddRegistry(true)}>{t("Add Registry")}</button>
+                  <button class="btn btn-primary" onClick={() => setShowAddRegistry(true)}>{t("Add Credential")}</button>
                 </Show>
               </div>
 
@@ -1604,6 +1609,11 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
         </Show>
 
         {/* === Remote Hosts Tab === */}
+        {/* === Docker Engine Tab === */}
+        <Show when={tab() === "docker-engine"}>
+          <EngineSettings />
+        </Show>
+
         <Show when={tab() === "remote-hosts"}>
           <div class="settings-section">
             <h2 class="settings-section-title">{t("Remote Hosts")}</h2>
@@ -2472,7 +2482,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                     ["AUTO", "#d29922", "Template catalog", "orca-desktop.com", "Fetches app templates (cached hourly)", "No user data"],
                     ["USER", "#58a6ff", "Docker Hub search", "hub.docker.com", "When you search for images", "Search query only"],
                     ["USER", "#58a6ff", "AI assistant", "Your provider", "When you click 'Ask AI'", "Context you see on screen"],
-                    ["USER", "#58a6ff", "Image pull", "Your registries", "When you click 'Pull'", "Image reference"],
+                    ["USER", "#58a6ff", "Image pull", "Your registry credentials", "When you click 'Pull'", "Image reference"],
                     ["USER", "#58a6ff", "Remote hosts", "Your Orca daemons", "When you add a remote host", "API token (yours)"],
                   ] as [string, string, string, string, string, string][]}>{([type, color, name, dest, when, data]) => (
                     <div style={{ display: "flex", "align-items": "center", gap: "12px", padding: "10px 0", "border-bottom": "1px solid #21262d" }}>

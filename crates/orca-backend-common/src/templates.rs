@@ -1,4 +1,4 @@
-use orca_core::templates::AppTemplate;
+use orca_core::templates::{AppTemplate, PASSWORD_PLACEHOLDER};
 
 /// Community catalog URL — hosted on GitHub Pages, updated via PRs.
 const CATALOG_URL: &str = "https://orca-desktop.com/templates.json";
@@ -121,23 +121,41 @@ pub async fn save_user_templates(templates: &[AppTemplate]) -> anyhow::Result<()
     Ok(())
 }
 
-/// Generate a 32-character random alphanumeric token using the OS CSPRNG.
-/// Used to fill in placeholder passwords for templated services, so this
-/// must be cryptographically secure.
-pub fn generate_token() -> String {
+/// The random secret substituted for [`PASSWORD_PLACEHOLDER`].
+///
+/// 16 characters from the OS CSPRNG — these values become database/session/API
+/// secrets. There is exactly **one** definition of the generated secret, so the
+/// value shown in the UI and the value a leftover placeholder falls back to can
+/// never diverge in length or source.
+pub fn placeholder_secret() -> String {
     use rand::Rng;
     use rand::distributions::Alphanumeric;
     rand::rngs::OsRng
         .sample_iter(&Alphanumeric)
-        .take(32)
+        .take(16)
         .map(char::from)
         .collect()
 }
 
-/// Get all templates (community catalog + user-defined).
-/// Community templates are loaded from the local cache (fetched async by the daemon).
-/// Passwords containing "changeme" are replaced with generated tokens.
-pub async fn all_templates() -> Vec<AppTemplate> {
+/// Env keys of a template that still carry [`PASSWORD_PLACEHOLDER`].
+///
+/// Metadata only — never contains a secret.
+fn placeholder_env_keys(env: &[String]) -> Vec<String> {
+    env.iter()
+        .filter(|spec| spec.contains(PASSWORD_PLACEHOLDER))
+        .filter_map(|spec| spec.split_once('=').map(|(key, _)| key.trim().to_string()))
+        .collect()
+}
+
+/// Load every template (community catalog + user-defined) exactly as stored,
+/// with [`PASSWORD_PLACEHOLDER`] left intact.
+///
+/// This is what the deploy paths use. They must **not** see a freshly substituted
+/// secret: the client already holds the one it was shown when the catalog was
+/// listed, and sends it back in `env` / `compose_yaml`. Re-minting here would put
+/// a different password in the response than the one the container receives —
+/// the very mismatch that showing the generated value is meant to eliminate.
+pub async fn raw_templates() -> Vec<AppTemplate> {
     let mut templates = Vec::new();
 
     // Load cached community templates
@@ -155,16 +173,38 @@ pub async fn all_templates() -> Vec<AppTemplate> {
         }
     }
 
-    // Replace placeholder passwords with generated ones
     for t in &mut templates {
-        let pw = generate_token();
-        let short_pw = &pw[..16];
+        t.generated_password_keys = placeholder_env_keys(&t.default_env);
+    }
+
+    templates
+}
+
+/// Templates for the catalog/UI: [`raw_templates`] with
+/// [`PASSWORD_PLACEHOLDER`] substituted by a random secret.
+///
+/// The substitution covers every surface the UI can see — `default_env`, the
+/// compose YAML and `notes` — so the client sends the real secret straight back
+/// when it deploys and the credential the user reads in the dialog is the one the
+/// container is created with. One secret per template is shared by all three, so
+/// a stack's database password and the service consuming it agree.
+///
+/// `generated_password_keys` reports which env keys were substituted, so the UI
+/// can say "generated" rather than claiming a default password.
+pub async fn all_templates() -> Vec<AppTemplate> {
+    let mut templates = raw_templates().await;
+
+    for t in &mut templates {
+        let secret = placeholder_secret();
         for env in &mut t.default_env {
-            if env.contains("changeme") {
-                *env = env.replace("changeme", short_pw);
+            if env.contains(PASSWORD_PLACEHOLDER) {
+                *env = env.replace(PASSWORD_PLACEHOLDER, &secret);
             }
         }
-        t.notes = t.notes.replace("changeme", short_pw);
+        t.notes = t.notes.replace(PASSWORD_PLACEHOLDER, &secret);
+        if let Some(yaml) = &mut t.compose_yaml {
+            *yaml = yaml.replace(PASSWORD_PLACEHOLDER, &secret);
+        }
     }
 
     templates

@@ -37,6 +37,14 @@ export interface Image {
   repo_tags: string[];
   size_bytes: number;
   created_at: string;
+  /** Containers using this image. `undefined` = unknown, `[]` = unused. */
+  used_by?: ImageUse[];
+}
+
+/** A container referencing an image. */
+export interface ImageUse {
+  name: string;
+  running: boolean;
 }
 
 export interface Volume {
@@ -45,6 +53,8 @@ export interface Volume {
   mountpoint: string;
   labels: Record<string, string>;
   created_at: string;
+  /** Containers mounting this volume. `undefined` = unknown, `[]` = unused. */
+  used_by?: string[];
 }
 
 export interface Network {
@@ -427,6 +437,8 @@ export interface AppTemplate {
   restart_policy: string;
   notes: string;
   is_builtin: boolean;
+  /** Env keys whose value was auto-generated from a `changeme` placeholder. */
+  generated_password_keys?: string[];
   compose_yaml?: string;
   generated_env?: Record<string, GeneratedValue>;
   generated_files?: Record<string, GeneratedValue>;

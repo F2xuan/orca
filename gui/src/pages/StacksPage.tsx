@@ -81,6 +81,19 @@ export default function StacksPage(props: StacksPageProps) {
       // Compose CLI actions return output, container actions don't
       if (result && typeof result === "object") {
         setComposeOutput({ name, output: result as any });
+        // The daemon deliberately returns the compose output with HTTP 200 so
+        // this panel can display it; `success` is the real verdict. Without
+        // this check a failed up/down/pull looked done until the user read
+        // the output panel.
+        if ((result as any).success === false) {
+          showToast(
+            t("{action} failed: {error}", {
+              action: action.replace(/_/g, " "),
+              error: (result as any).stderr || t("Unknown error"),
+            }),
+            "error",
+          );
+        }
       }
       setTimeout(refresh, 500);
     } catch (err) {

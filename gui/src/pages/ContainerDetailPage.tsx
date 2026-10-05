@@ -431,6 +431,11 @@ export default function ContainerDetailPage(props: ContainerDetailPageProps) {
       // Build the update params
       const params: any = { id: props.containerId };
 
+      // An empty field means "unlimited" — that is how initResourceFields
+      // renders "no limit". Previously the parameter was omitted entirely,
+      // which the daemon reads as "leave unchanged", so clearing a limit
+      // silently did nothing while still toasting success. Send an explicit
+      // 0 instead: Docker treats memory 0 / nano_cpus 0 as "no limit".
       if (memStr) {
         const num = parseFloat(memStr);
         if (!isNaN(num) && memStr === `${num}`) {
@@ -438,6 +443,8 @@ export default function ContainerDetailPage(props: ContainerDetailPageProps) {
         } else {
           params.memory_limit = memStr;
         }
+      } else {
+        params.memory_limit = "0";
       }
 
       if (cpuStr) {
@@ -445,6 +452,8 @@ export default function ContainerDetailPage(props: ContainerDetailPageProps) {
         if (!isNaN(cpuNum) && cpuNum > 0) {
           params.cpu_limit = cpuNum;
         }
+      } else {
+        params.cpu_limit = 0; // 0 = unlimited, same reasoning as memory above
       }
 
       params.restart_policy = editRestart();
@@ -496,7 +505,8 @@ export default function ContainerDetailPage(props: ContainerDetailPageProps) {
     if (!await confirmDanger(t("Remove Container"), t("Remove container '{name}'? This cannot be undone.", { name: c.name }))) return;
     setActionInProgress(true);
     try {
-      await invoke("remove_container", { id: props.containerId });
+      // force: a running/restarting container cannot be removed without it (409).
+        await invoke("remove_container", { id: props.containerId, force: true });
       showToast(t("Container removed"), "success");
       props.onBack();
     } catch (err) {

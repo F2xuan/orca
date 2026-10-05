@@ -1,5 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+/// Placeholder standing in for a credential that must not ship with the
+/// catalog. Templates carry `KEY=changeme`; `all_templates()` replaces it with a
+/// fresh random secret before the UI ever sees the template, and the client
+/// sends that value back when deploying — so the password shown in the dialog is
+/// the password the container gets.
+///
+/// It is also the marker the deploy paths look for, as a safety net: a caller
+/// that posts the raw placeholder (scripts, the AI agent tool) still never gets
+/// `changeme` as a live credential.
+pub const PASSWORD_PLACEHOLDER: &str = "changeme";
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppTemplate {
     pub id: String,
@@ -16,6 +27,15 @@ pub struct AppTemplate {
     /// Whether this is a builtin template (read-only) or user-created.
     #[serde(default)]
     pub is_builtin: bool,
+    /// Env keys whose value was AUTO-GENERATED from a [`PASSWORD_PLACEHOLDER`].
+    ///
+    /// The placeholder → random rewrite happens before the UI sees the template,
+    /// so without this the front end cannot tell an auto-generated secret apart
+    /// from a genuine hard-coded default like `admin`. That distinction is what
+    /// decides whether "contains default passwords — change before production"
+    /// is true or a lie.
+    #[serde(default)]
+    pub generated_password_keys: Vec<String>,
     /// Optional docker-compose YAML content. When set, deploys as a compose stack
     /// instead of a single container.
     #[serde(default, skip_serializing_if = "Option::is_none")]

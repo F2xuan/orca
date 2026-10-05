@@ -27,7 +27,14 @@ const SVG_ALLOWED_TAGS = new Set([
   "use",
   "text",
   "tspan",
-]);
+  // The SVG DOM reports names in their *original* case (`linearGradient`,
+  // `viewBox`), but every lookup below lowercases first (line 138/152). Without
+  // this normalisation the lookups could never match the camelCase members, so
+  // `viewBox` was dropped and `<linearGradient>` / `<clipPath>` were deleted
+  // outright — every template icon rendered at the wrong scale with its
+  // gradients and clip paths stripped. Attribute *names* are still written back
+  // verbatim (`removeAttribute(attr.name)`), so case is preserved in the output.
+].map((t) => t.toLowerCase()));
 
 const SVG_ALLOWED_ATTRS = new Set([
   "id",
@@ -80,7 +87,7 @@ const SVG_ALLOWED_ATTRS = new Set([
   "href",
   "xlink:href",
   "src",
-]);
+].map((a) => a.toLowerCase()));
 
 const DANGEROUS_URL_PREFIX = /^\s*(javascript|data|vbscript):/i;
 
@@ -253,10 +260,13 @@ export function safeHref(url: unknown): string {
   // Reject protocol-relative URLs (`//evil.example/x`) — they inherit the
   // current page's scheme and effectively behave like absolute cross-origin
   // links, bypassing the intent of the leading-`/` branch below.
-  if (/^\/\//.test(s)) return "";
-  // A leading `/` is allowed only for same-origin absolute paths; the
-  // following character must NOT be another `/` (that would be
-  // protocol-relative, handled above).
-  if (/^(https?:\/\/|mailto:|\/[^\/]|#)/i.test(s)) return s;
+  // `\` is normalised to `/` by WHATWG URL parsing for special schemes, so
+  // `/\evil.example/x` is equivalent to `//evil.example/x` — it resolves
+  // cross-origin. Reject a leading `/` followed by `/` **or** `\`.
+  if (/^\/[/\\]/.test(s)) return "";
+  // Strip control characters before matching: they are ignored by URL parsers
+  // but would otherwise let `java\tscript:` style prefixes slip past.
+  const cleaned = s.replace(/[\u0000-\u001F\u007F]/g, "");
+  if (/^(https?:\/\/|mailto:|\/[^\/\\]|#)/i.test(cleaned)) return cleaned;
   return "";
 }

@@ -135,6 +135,7 @@ export default function VolumesPage(props: VolumesPageProps) {
               <SortableHeader label="Driver" field="driver" currentSort={sortField()} currentDirection={sortDir()} onSort={toggleSort} />
               <SortableHeader label="Size" field="size" currentSort={sortField()} currentDirection={sortDir()} onSort={toggleSort} />
               <SortableHeader label="Created" field="created" currentSort={sortField()} currentDirection={sortDir()} onSort={toggleSort} />
+              <th>{t("In use")}</th>
               <th style={{ "text-align": "right" }}>{t("Actions")}</th>
             </tr>
           </thead>
@@ -155,6 +156,27 @@ export default function VolumesPage(props: VolumesPageProps) {
                     {volumeSizes()[v.name] !== undefined ? formatBytes(volumeSizes()[v.name]) : "-"}
                   </td>
                   <td style={{ color: "#8b949e" }}>{formatTimestamp(v.created_at)}</td>
+                  <td>
+                    <Show
+                      when={v.used_by}
+                      fallback={<span style={{ color: "#6e7681", cursor: "help" }} title={t("Could not determine whether this volume is in use.")}>?</span>}
+                    >
+                      {(used) => (
+                        <Show
+                          when={used().length > 0}
+                          fallback={<span style={{ color: "#6e7681" }}>—</span>}
+                        >
+                          <span
+                            title={t("In use by: {names}", { names: used().join(", ") })}
+                            style={{ display: "inline-flex", "align-items": "center", gap: "5px", "font-size": "12px", color: "#3fb950", cursor: "help" }}
+                          >
+                            <span style={{ width: "8px", height: "8px", "border-radius": "50%", background: "#3fb950", "flex-shrink": "0" }} />
+                            <span class="mono" style={{ color: "#e6edf3" }}>{used().join(", ")}</span>
+                          </span>
+                        </Show>
+                      )}
+                    </Show>
+                  </td>
                   <td style={{ "text-align": "right" }}>
                     <Show
                       when={deletingName() === v.name}

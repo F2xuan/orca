@@ -9,6 +9,25 @@ pub struct Image {
     pub repo_tags: Vec<String>,
     pub size_bytes: u64,
     pub created_at: String,
+    /// Containers referencing this image.
+    ///
+    /// Docker's own `Containers` count on the image summary is deprecated and
+    /// always reports `-1`, so this is derived by joining the container list.
+    ///
+    /// `None` means "could not be determined" (the container list was
+    /// unavailable) — deliberately distinct from `Some(vec![])`, i.e. "not in
+    /// use", so the UI never claims an image is unused when it simply doesn't
+    /// know.
+    #[serde(default)]
+    pub used_by: Option<Vec<ImageUse>>,
+}
+
+/// A container referencing an image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUse {
+    /// Container name, without Docker's leading `/`.
+    pub name: String,
+    pub running: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

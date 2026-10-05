@@ -17,6 +17,16 @@ interface EnvEntry { key: string; value: string }
 interface VolumeEntry { source: string; target: string }
 interface PortEntry { host: string; container: string }
 
+/** Four lowercase alphanumerics — the same shape as the daemon's `short_suffix()`. */
+function randomSuffix(): string {
+  let out = "";
+  while (out.length < 4) out += Math.random().toString(36).slice(2);
+  return out.slice(0, 4);
+}
+
+/** Stand-in for the suffix the daemon invents when the name field is empty. */
+const AUTO_TAG_PATTERN = "xxxx";
+
 interface TemplatesPageProps {
   onNavigate?: (target: string) => void;
 }
@@ -37,6 +47,51 @@ export default function TemplatesPage(props: TemplatesPageProps) {
 
   // Deploy dialog state
   const [deployName, setDeployName] = createSignal("");
+  // Shown only when the user clears the name field, where the daemon picks the
+  // suffix itself — "xxxx" marks it as a shape, not a promise.
+  const autoNamePlaceholder = () => {
+    const tpl = deployTarget();
+    return tpl ? `${tpl.id}-${AUTO_TAG_PATTERN}` : "";
+  };
+  // The suffix the daemon appends to the template's named volumes: the
+  // container name with the template prefix stripped (mirrors
+  // `deploy_volume_tag` in crates/orca-daemon/src/api.rs), or a random one when
+  // the field is left empty.
+  const volumeTag = () => {
+    const name = deployName().trim();
+    if (!name) return AUTO_TAG_PATTERN;
+    const tpl = deployTarget();
+    const prefix = tpl ? `${tpl.id}-` : "";
+    return prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
+  };
+  const templateVolumeSources = () => {
+    const tpl = deployTarget();
+    if (!tpl) return [] as string[];
+    return (tpl.default_volumes || [])
+      .map((v) => v.split(":")[0] || "")
+      .filter((src) => src && !/^(~|\/|\.\/|\.\.\/)/.test(src));
+  };
+  /// Whether any row currently shows a namespaced template volume — i.e. the
+  /// dialog is showing a volume name this deploy will actually create.
+  const hasNamespacedVolume = () => {
+    const bases = templateVolumeSources();
+    return bases.length > 0
+      && deployVolumes().some((v) => bases.some((b) => v.source.startsWith(`${b}-`)));
+  };
+  /// Rename the template's own volumes after the container name changed, so the
+  /// field keeps showing the name that will actually be created. A row counts as
+  /// "ours" only while it still holds the value we derived from the previous tag;
+  /// once the user types their own name it is left alone.
+  const retagTemplateVolumes = (prevTag: string, nextTag: string) => {
+    if (!prevTag || prevTag === nextTag) return;
+    const bases = templateVolumeSources();
+    setDeployVolumes((prev) =>
+      prev.map((v) => {
+        const base = bases.find((b) => v.source === `${b}-${prevTag}`);
+        return base ? { ...v, source: `${base}-${nextTag}` } : v;
+      }),
+    );
+  };
   const [nameConflict, setNameConflict] = createSignal(false);
   const [deployPorts, setDeployPorts] = createSignal<PortEntry[]>([]);
   const [deployEnv, setDeployEnv] = createSignal<EnvEntry[]>([]);
@@ -185,10 +240,32 @@ export default function TemplatesPage(props: TemplatesPageProps) {
   // --- Deploy dialog ---
   const openDeploy = async (template: AppTemplate) => {
     setDeployTarget(template);
-    setDeployName(template.id);
+    // Prefilled with a unique name instead of the bare template id: two
+    // deploys of the same template must not share a container name *or* the
+    // template's named volume (two mongod instances sharing `mongodata`
+    // crash-looped on the data-directory lock). The daemon appends the same
+    // suffix to the template's volumes, so what is shown here is what gets
+    // created; the user can still type any name they want.
+    const suffix = randomSuffix();
+    setDeployName(`${template.id}-${suffix}`);
+    setNameConflict(false);
     setDeployPorts(template.default_ports.map(parsePort));
     setDeployEnv(template.default_env.map(parseEnv));
-    setDeployVolumes(template.default_volumes.map(parseVolume));
+    // The template's own named volumes are namespaced per deploy, and the field
+    // shows that final name — showing the bare `mongodata` made it look like two
+    // deploys would share a volume even though the daemon renames it. Bind mounts
+    // are left exactly as the template declares them.
+    const namedSources = (template.default_volumes || [])
+      .map((v) => v.split(":")[0] || "")
+      .filter((src) => src && !/^(~|\/|\.\/|\.\.\/)/.test(src));
+    setDeployVolumes(
+      template.default_volumes.map((spec) => {
+        const entry = parseVolume(spec);
+        return namedSources.includes(entry.source)
+          ? { ...entry, source: `${entry.source}-${suffix}` }
+          : entry;
+      }),
+    );
     setDeployComposeYaml(template.compose_yaml || "");
     // Initialize user inputs for generated_env fields
     const inputs: Record<string, string> = {};
@@ -203,8 +280,8 @@ export default function TemplatesPage(props: TemplatesPageProps) {
       const containers = (await invoke("list_containers")) as { name: string }[];
       const names = new Set(containers.map((c) => c.name.replace(/^\//, "")));
       setExistingNames(names);
-      setNameConflict(names.has(template.id));
-    } catch { setExistingNames(new Set<string>()); }
+      setNameConflict(names.has(deployName()));
+    } catch { setExistingNames(new Set<string>()); setNameConflict(false); }
 
     // Load host options for multi-host deploy
     try {
@@ -394,6 +471,29 @@ export default function TemplatesPage(props: TemplatesPageProps) {
         const notes = result?.notes || template.notes;
         const hostSuffix = switchedHost ? ` on ${targetHostLabel}` : "";
 
+        // Defence in depth: never claim success unless the stack actually came
+        // up. The daemon already 500s on a non-zero compose exit, but a 2xx with
+        // `exit_code != 0` must not fall through to the success toast either.
+        const deployExit = result?.output?.exit_code;
+        if (typeof deployExit === "number" && deployExit !== 0) {
+          const detail =
+            String(result?.output?.stderr || "")
+              .split("\n")
+              .filter((l) => l.trim())
+              .pop() || t("Unknown error");
+          closeDeploy();
+          logError(`Deploy failed (exit ${deployExit})`, `${template.name}: ${detail}`);
+          showToast(t("Deploy failed (exit {code}): {error}", { code: deployExit, error: detail }), "error");
+          if (switchedHost && originalHost) {
+            try {
+              const switchBackId = originalHost.is_remote && originalHost.id ? originalHost.id : null;
+              await invoke("switch_host", { id: switchBackId });
+            } catch { /* best effort */ }
+          }
+          setDeploying(false);
+          return;
+        }
+
         if (isCompose) {
           const stackName = result?.stack || deployName() || template.id;
           const guide = result?.setup_guide || template.setup_guide;
@@ -507,11 +607,27 @@ export default function TemplatesPage(props: TemplatesPageProps) {
     }
   };
 
-  const hasPasswordEnv = () =>
-    deployEnv().some((e) => {
-      const k = e.key.toLowerCase();
-      return k.includes("password") || k.includes("secret");
-    });
+  /// Password-ish env keys in the deploy form.
+  const passwordEnvKeys = () =>
+    deployEnv()
+      .map((e) => e.key)
+      .filter((k) => {
+        const l = k.toLowerCase();
+        return l.includes("password") || l.includes("secret");
+      });
+
+  /// Keys whose value the backend already replaced with a random secret — these
+  /// are NOT defaults and must not be reported as such.
+  const generatedKeys = (tpl?: AppTemplate) => new Set(tpl?.generated_password_keys ?? []);
+
+  /// A genuine hard-coded credential (e.g. grafana `admin`, minio
+  /// `minioadmin`) that the user really does have to change.
+  const hasDefaultPasswordEnv = (tpl?: AppTemplate) =>
+  passwordEnvKeys().some((k) => !generatedKeys(tpl).has(k));
+
+  /// A secret that was auto-generated from a `changeme` placeholder.
+  const hasGeneratedPasswordEnv = (tpl?: AppTemplate) =>
+  passwordEnvKeys().some((k) => generatedKeys(tpl).has(k));
 
   // --- Template Editor ---
   const openCreateTemplate = () => {
@@ -626,7 +742,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
     </div>
   );
 
-  const EnvEditor = (props: { env: () => EnvEntry[]; update: typeof updateEnv; add: typeof addEnv; remove: typeof removeEnv; showWarning?: boolean }) => (
+  const EnvEditor = (props: { env: () => EnvEntry[]; update: typeof updateEnv; add: typeof addEnv; remove: typeof removeEnv; showWarning?: boolean; showGenerated?: boolean }) => (
     <div class="form-group">
       <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", "margin-bottom": "6px" }}>
         <label class="form-label" style={{ margin: 0 }}>{t("Environment Variables")}</label>
@@ -658,6 +774,11 @@ export default function TemplatesPage(props: TemplatesPageProps) {
           {"\u26a0"} {t("Contains default passwords — change before production use!")}
         </span>
       </Show>
+          <Show when={props.showGenerated}>
+            <span class="form-hint" style={{"color":"#3fb950","margin-top":"6px","display":"block"}}>
+              {"\u2713"} {t("Passwords below are generated randomly — there is no default to change.")}
+            </span>
+          </Show>
     </div>
   );
 
@@ -958,15 +1079,29 @@ export default function TemplatesPage(props: TemplatesPageProps) {
                     value={deployName()}
                     onInput={(e) => {
                       const name = e.currentTarget.value;
+                      const prevTag = volumeTag();
                       setDeployName(name);
                       setNameConflict(existingNames().has(name));
+                      // Keep the volume names in step with the container name,
+                      // so the dialog never shows a volume that won't be created.
+                      const tpl = deployTarget();
+                      const prefix = tpl ? `${tpl.id}-` : "";
+                      const nextTag = name.trim()
+                        ? (prefix && name.trim().startsWith(prefix) ? name.trim().slice(prefix.length) : name.trim())
+                        : AUTO_TAG_PATTERN;
+                      retagTemplateVolumes(prevTag, nextTag);
                     }}
-                    placeholder={deployComposeYaml() ? t("Stack name") : t("Container name")}
+                    placeholder={autoNamePlaceholder() || (deployComposeYaml() ? t("Stack name") : t("Container name"))}
                     style={{ "border-color": nameConflict() ? "#f85149" : undefined }}
                   />
                   <Show when={nameConflict()}>
                     <span class="form-hint" style={{ color: "#f85149" }}>
                       A container named "{deployName()}" already exists
+                    </span>
+                  </Show>
+                  <Show when={!deployName() && autoNamePlaceholder()}>
+                    <span class="form-hint">
+                      {t("Leave empty to auto-generate a unique name — the template's named volumes get the same suffix, so repeat deploys never share data.")}
                     </span>
                   </Show>
                 </div>
@@ -986,8 +1121,13 @@ export default function TemplatesPage(props: TemplatesPageProps) {
                       <input class="form-input" value={template().image} disabled style={{"opacity":"0.7"}} />
                     </div>
                     <PortEditor ports={deployPorts} update={updatePort} add={addPort} remove={removePort} />
-                    <EnvEditor env={deployEnv} update={updateEnv} add={addEnv} remove={removeEnv} showWarning={hasPasswordEnv()} />
+                    <EnvEditor env={deployEnv} update={updateEnv} add={addEnv} remove={removeEnv} showWarning={hasDefaultPasswordEnv(template())} showGenerated={hasGeneratedPasswordEnv(template())} />
                     <VolumeEditor volumes={deployVolumes} update={updateVolume} add={addVolume} remove={removeVolume} />
+                    <Show when={hasNamespacedVolume()}>
+                      <span class="form-hint" style={{ "margin-top": "-8px", "margin-bottom": "12px", display: "block" }}>
+                        {t("The template's volumes carry this deploy's suffix so two deploys never share data. A name you type yourself is used as-is.")}
+                      </span>
+                    </Show>
                   </>
                 }>
                   <div style={{ background: "rgba(88,166,255,0.08)", border: "1px solid rgba(88,166,255,0.3)", "border-radius": "6px", padding: "8px 12px", "margin-bottom": "12px", "font-size": "12px", color: "#58a6ff", display: "flex", "align-items": "center", gap: "6px" }}>

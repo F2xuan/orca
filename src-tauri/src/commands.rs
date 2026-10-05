@@ -254,6 +254,32 @@ async fn patch_json(path: &str, body: &serde_json::Value) -> Result<serde_json::
     resp.json().await.map_err(|e| format!("Invalid response: {e}"))
 }
 
+/// The daemon reports failures as `{"error": "..."}`. Unwrap that so the UI can
+/// show the actual message instead of a JSON blob.
+fn daemon_error(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+        .unwrap_or_else(|| body.to_string())
+}
+
+async fn put_json(path: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let base = daemon_url();
+    let resp = client()
+        .put(format!("{base}{path}"))
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("Daemon connection failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(daemon_error(&body));
+    }
+
+    resp.json().await.map_err(|e| format!("Invalid response: {e}"))
+}
+
 async fn delete(path: &str) -> Result<(), String> {
     let base = daemon_url();
     let resp = client()
@@ -351,8 +377,16 @@ pub async fn exec_container(
 }
 
 #[tauri::command]
-pub async fn remove_container(id: String) -> Result<(), String> {
-    delete(&format!("/containers/{}", urlencoding::encode(&id))).await
+pub async fn remove_container(id: String, force: Option<bool>) -> Result<(), String> {
+    // Without `force`, Docker refuses to remove a running or restarting
+    // container (409). The GUI has always asked for force on delete; this
+    // parameter used to be missing from the signature, so it was dropped here
+    // and the daemon then hardcoded `false`.
+    let mut path = format!("/containers/{}", urlencoding::encode(&id));
+    if force.unwrap_or(false) {
+        path.push_str("?force=true");
+    }
+    delete(&path).await
 }
 
 #[tauri::command]
@@ -2550,6 +2584,33 @@ pub async fn switch_to_orca_runtime() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn stop_docker_desktop() -> Result<serde_json::Value, String> {
     post_json("/environment/stop-docker-desktop").await
+}
+
+#[tauri::command]
+pub async fn get_engine_config() -> Result<serde_json::Value, String> {
+    get_json("/environment/engine-config").await
+}
+
+/// Apply a structured patch. Only the keys present in `patch` are touched;
+/// everything else in `daemon.json` is preserved.
+#[tauri::command]
+pub async fn set_engine_config(patch: serde_json::Value) -> Result<serde_json::Value, String> {
+    put_json("/environment/engine-config", &patch).await
+}
+
+/// Replace the entire config object (advanced raw-JSON editor).
+#[tauri::command]
+pub async fn set_engine_config_raw(config: serde_json::Value) -> Result<serde_json::Value, String> {
+    put_json(
+        "/environment/engine-config/raw",
+        &serde_json::json!({ "config": config }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn restart_docker_engine() -> Result<serde_json::Value, String> {
+    post_json("/environment/restart-engine").await
 }
 
 // --- Templates ---

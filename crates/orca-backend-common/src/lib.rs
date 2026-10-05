@@ -13,6 +13,7 @@ pub mod export;
 pub mod images;
 pub mod k8s;
 pub mod networks;
+pub mod engine_config;
 pub mod search;
 pub mod templates;
 pub mod volumes;

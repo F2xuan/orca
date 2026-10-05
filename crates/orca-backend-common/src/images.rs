@@ -1,9 +1,71 @@
+use bollard::container::ListContainersOptions;
 use bollard::image::{BuildImageOptions, CreateImageOptions, ListImagesOptions, RemoveImageOptions, TagImageOptions};
+use std::collections::HashMap;
 use tokio_stream::StreamExt;
 
 use orca_core::image::*;
 
 use crate::BollardRuntime;
+
+/// Group containers by the image they reference. Pure, so the mapping (and the
+/// name/state handling) is testable without a live daemon.
+fn build_usage(containers: &[bollard::models::ContainerSummary]) -> HashMap<String, Vec<ImageUse>> {
+    let mut usage: HashMap<String, Vec<ImageUse>> = HashMap::new();
+    for c in containers {
+        let Some(image_id) = c.image_id.as_deref().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let name = c
+            .names
+            .as_ref()
+            .and_then(|n| n.first())
+            .map(|n| n.trim_start_matches('/').to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| {
+                // No name (rare) — fall back to the short ID so the tooltip
+                // still identifies the container.
+                c.id.as_deref().unwrap_or("?").chars().take(12).collect()
+            });
+
+        usage.entry(image_id.to_string()).or_default().push(ImageUse {
+            name,
+            running: c.state.as_deref() == Some("running"),
+        });
+    }
+
+    // Running containers first, then alphabetical — the UI lists them in this
+    // order in the tooltip.
+    for list in usage.values_mut() {
+        list.sort_by(|a, b| b.running.cmp(&a.running).then_with(|| a.name.cmp(&b.name)));
+    }
+
+    usage
+}
+
+/// Which containers reference each image, keyed by full image ID.
+///
+/// Docker's `Containers` count on the image summary is deprecated and always
+/// returns `-1`, so usage has to be derived by joining against the container
+/// list (`all: true` — a *stopped* container still holds a reference and still
+/// blocks image deletion).
+///
+/// `Err` is returned rather than an empty map so callers can distinguish
+/// "nothing uses this image" from "we couldn't find out".
+async fn usage_by_image(
+    docker: &bollard::Docker,
+) -> anyhow::Result<HashMap<String, Vec<ImageUse>>> {
+    let options = ListContainersOptions::<String> {
+        all: true,
+        ..Default::default()
+    };
+    let containers = docker.list_containers(Some(options)).await?;
+    Ok(build_usage(&containers))
+}
+
+/// Look up usage for a single image without listing every image.
+async fn usage_for(docker: &bollard::Docker, id: &str) -> Option<Vec<ImageUse>> {
+    usage_by_image(docker).await.ok()?.remove(id)
+}
 
 impl ImageManager for BollardRuntime {
     async fn list(&self) -> anyhow::Result<Vec<Image>> {
@@ -12,6 +74,9 @@ impl ImageManager for BollardRuntime {
             ..Default::default()
         };
         let images = self.docker.list_images(Some(options)).await?;
+        // `None` (container list unavailable) must not be flattened into
+        // "unused" — see `Image::used_by`.
+        let usage = usage_by_image(&self.docker).await.ok();
 
         Ok(images
             .iter()
@@ -20,6 +85,9 @@ impl ImageManager for BollardRuntime {
                 repo_tags: img.repo_tags.clone(),
                 size_bytes: img.size as u64,
                 created_at: img.created.to_string(),
+                used_by: usage
+                    .as_ref()
+                    .map(|u| u.get(&img.id).cloned().unwrap_or_default()),
             })
             .collect())
     }
@@ -92,11 +160,15 @@ impl ImageManager for BollardRuntime {
 
     async fn inspect(&self, id: &str) -> anyhow::Result<Image> {
         let info = self.docker.inspect_image(id).await?;
+        let full_id = info.id.clone().unwrap_or_default();
+        // Filled here too, so the detail panel can't disagree with the list.
+        let used_by = usage_for(&self.docker, &full_id).await;
         Ok(Image {
-            id: info.id.unwrap_or_default(),
+            id: full_id,
             repo_tags: info.repo_tags.unwrap_or_default(),
             size_bytes: info.size.unwrap_or(0) as u64,
             created_at: info.created.unwrap_or_default(),
+            used_by,
         })
     }
 
@@ -380,5 +452,83 @@ mod tests {
     #[test]
     fn should_ignore_empty_patterns() {
         assert!(!should_ignore("anything.rs", &patterns(&[])));
+    }
+
+    // ── image usage join ──
+    //
+    // Docker's `Containers` count on the image summary is deprecated (always
+    // `-1`), so usage is derived by grouping containers by their `image_id`.
+
+    fn container(
+        id: &str,
+        name: Option<&str>,
+        image_id: Option<&str>,
+        state: &str,
+    ) -> bollard::models::ContainerSummary {
+        bollard::models::ContainerSummary {
+            id: Some(id.to_string()),
+            names: name.map(|n| vec![n.to_string()]),
+            image_id: image_id.map(|i| i.to_string()),
+            state: Some(state.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn usage_groups_by_image_strips_slash_and_sorts_running_first() {
+        let cs = vec![
+            container("c1", Some("/web"), Some("sha256:aaa"), "running"),
+            container("c2", Some("/db"), Some("sha256:aaa"), "exited"),
+            container("c3", Some("/other"), Some("sha256:bbb"), "running"),
+        ];
+        let u = build_usage(&cs);
+
+        assert_eq!(u.len(), 2);
+        let a = &u["sha256:aaa"];
+        assert_eq!(a.len(), 2);
+        // Docker reports names as `/web`; the leading slash must be stripped.
+        assert_eq!(a[0].name, "web");
+        assert!(a[0].running, "running container must sort first");
+        assert_eq!(a[1].name, "db");
+        assert!(!a[1].running);
+    }
+
+    #[test]
+    fn usage_includes_stopped_containers() {
+        // A stopped container still holds the image reference and still blocks
+        // `docker rmi`, so it must not be filtered out.
+        let cs = vec![container("c1", Some("/gone"), Some("sha256:aaa"), "exited")];
+        let u = build_usage(&cs);
+        assert_eq!(u["sha256:aaa"].len(), 1);
+        assert!(!u["sha256:aaa"][0].running);
+    }
+
+    #[test]
+    fn usage_ignores_containers_without_usable_image_id() {
+        let cs = vec![
+            container("c1", Some("/x"), None, "running"),
+            container("c2", Some("/y"), Some(""), "running"),
+        ];
+        assert!(build_usage(&cs).is_empty());
+    }
+
+    #[test]
+    fn usage_falls_back_to_short_id_when_container_is_unnamed() {
+        let cs = vec![container(
+            "abcdef0123456789",
+            None,
+            Some("sha256:aaa"),
+            "running",
+        )];
+        assert_eq!(build_usage(&cs)["sha256:aaa"][0].name, "abcdef012345");
+    }
+
+    #[test]
+    fn usage_groups_multiple_containers_on_one_image() {
+        let cs = vec![
+            container("c1", Some("/a"), Some("sha256:same"), "running"),
+            container("c2", Some("/b"), Some("sha256:same"), "running"),
+        ];
+        assert_eq!(build_usage(&cs)["sha256:same"].len(), 2);
     }
 }

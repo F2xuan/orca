@@ -12,7 +12,15 @@ fn ensure_stub(bin_dir: &PathBuf, name: &str, target: &str) {
         std::fs::create_dir_all(bin_dir).ok();
         // Create an empty stub — enough to pass Tauri's resource check.
         // It will be replaced by the actual binary at build/release time.
+        // Mode must be executable: on macOS/BSD, `cp` over an existing file
+        // keeps the destination permissions, so a 0644 stub would strip +x
+        // from the real binary and break the bundled app.
         std::fs::write(&bin_path, b"").ok();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&bin_path, std::fs::Permissions::from_mode(0o755));
+        }
         println!(
             "cargo:warning=Created stub binary at {}, build the real binary for production use",
             bin_path.display()

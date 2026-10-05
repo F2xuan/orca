@@ -11,6 +11,16 @@ pub struct Volume {
     pub mountpoint: String,
     pub labels: HashMap<String, String>,
     pub created_at: String,
+    /// Names of containers that mount this volume.
+    ///
+    /// Docker refuses to remove a volume that any container references —
+    /// including *stopped* ones — answering 409. The UI previously showed
+    /// nothing about usage, so a failed delete looked inexplicable.
+    ///
+    /// `None` means "could not be determined" (container list unavailable),
+    /// deliberately distinct from `Some(vec![])` = "not in use".
+    #[serde(default)]
+    pub used_by: Option<Vec<String>>,
 }
 
 #[trait_variant::make(Send)]

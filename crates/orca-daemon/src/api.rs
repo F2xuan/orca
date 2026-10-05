@@ -28,6 +28,7 @@ use orca_core::kubernetes::K8sManager;
 use orca_core::machine::{MachineBackend, MachineConfig, MachineInfo, MachineState};
 use orca_core::network::NetworkManager;
 use orca_core::runtime::{ContainerRuntime, ContainerStats};
+use orca_core::templates::{AppTemplate, PASSWORD_PLACEHOLDER};
 use orca_core::volume::VolumeManager;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -376,6 +377,15 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/environment/docker-desktop-status", get(docker_desktop_status))
         .route("/environment/switch-to-orca", post(switch_to_orca))
         .route("/environment/stop-docker-desktop", post(stop_docker_desktop))
+        .route(
+            "/environment/engine-config",
+            get(get_engine_config).put(put_engine_config),
+        )
+        .route(
+            "/environment/engine-config/raw",
+            axum::routing::put(put_engine_config_raw),
+        )
+        .route("/environment/restart-engine", post(restart_engine))
         // System health
         .route("/system/health", get(system_health))
         .route("/system/host-uid", get(host_uid))
@@ -430,12 +440,41 @@ pub fn routes() -> Router<Arc<AppState>> {
 struct HealthResponse {
     status: &'static str,
     version: &'static str,
+    /// Fingerprint of the binary this process was loaded from (see
+    /// [`build_fingerprint`]). Reported so the desktop app can tell that the
+    /// sidecar on disk has been replaced.
+    build: &'static str,
+}
+
+/// Fingerprint of the executable this process was loaded from, captured once at
+/// startup.
+///
+/// A version string alone cannot distinguish two builds: rebuilding from newer
+/// source still reports the same `CARGO_PKG_VERSION`, so an app that only
+/// compares versions will keep the *old* process running and every backend
+/// change silently fails to take effect. The file's mtime is read at startup
+/// (while the old binary is still in place), so once the file is replaced the
+/// value reported here no longer matches the file on disk — which is exactly the
+/// signal the app needs.
+fn build_fingerprint() -> &'static str {
+    static FINGERPRINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FINGERPRINT.get_or_init(|| {
+        std::env::current_exe()
+            .and_then(std::fs::canonicalize)
+            .and_then(std::fs::metadata)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_default()
+    })
 }
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
+        build: build_fingerprint(),
     })
 }
 
@@ -573,8 +612,18 @@ async fn kill_container(
 async fn remove_container(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    state.rt().await.remove_container(&id, false).await?;
+    // `force` is what lets a running — or *restarting* — container be removed.
+    // Without it Docker answers 409:
+    //   "container is restarting: stop the container before removing or force remove"
+    // This was hardcoded to `false`, so the UI's force intent never reached
+    // Docker and such a container could not be deleted at all.
+    let force = matches!(
+        query.get("force").map(String::as_str),
+        Some("1" | "true" | "yes")
+    );
+    state.rt().await.remove_container(&id, force).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -3373,6 +3422,21 @@ async fn compose_deploy_path(
     let validated_str = validated.to_string_lossy().to_string();
     let output = state.rt().await.compose_up(&validated_str, None).await?;
 
+    // Same rule as `deploy_template`: a non-zero exit means the stack did not
+    // come up, so fail before registering gateway routes / env links for it.
+    if output.exit_code != 0 {
+        let detail = output
+            .stderr
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .next_back()
+            .unwrap_or("(no output)");
+        return Err(ApiError(anyhow::anyhow!(
+            "Compose deploy failed (exit {}): {detail}",
+            output.exit_code
+        )));
+    }
+
     // Auto-register gateway routes from orca.yaml if present
     let dir_path = validated.as_path();
     let gateway_routes = parse_orca_yaml_gateway_routes(dir_path);
@@ -4372,6 +4436,82 @@ async fn stop_docker_desktop() -> Result<impl IntoResponse, ApiError> {
     Ok(Json(serde_json::json!({ "message": "Docker Desktop stopped" })))
 }
 
+/// Read the Docker Engine config plus whether the running engine has picked up
+/// the on-disk values.
+async fn get_engine_config() -> Result<impl IntoResponse, ApiError> {
+    use orca_backend_common::engine_config as ec;
+
+    let path = ec::daemon_json_path();
+    let config = ec::read_config()?;
+
+    Ok(Json(serde_json::json!({
+        "config": config,
+        "path": path.to_string_lossy(),
+        "exists": path.exists(),
+        // Only mirrors / log-driver / storage-driver are comparable via
+        // `docker info`; the UI states the general "needs a restart" rule too.
+        "running": ec::running_engine().await,
+        "restart_required": ec::restart_required().await,
+        // `bip`, `iptables` and `live-restore` are Linux-daemon concepts and are
+        // inert on Docker Desktop, so the form hides them per platform.
+        "platform": std::env::consts::OS,
+    })))
+}
+
+/// Apply a structured engine-config patch, preserving every key we don't manage.
+async fn put_engine_config(
+    Json(patch): Json<orca_backend_common::engine_config::EngineConfigPatch>,
+) -> Result<impl IntoResponse, ApiError> {
+    use orca_backend_common::engine_config as ec;
+
+    // Validate first so a bad value is a 400 and the file is never touched;
+    // genuine I/O problems still surface as 500 from the write itself.
+    ec::validate_patch(&patch).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let backup = ec::apply_patch(&patch)?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "path": ec::daemon_json_path().to_string_lossy(),
+        "backup": backup.map(|p| p.to_string_lossy().to_string()),
+        // dockerd only reads this file at startup, so the change is inert until
+        // the engine restarts.
+        "restart_required": true,
+    })))
+}
+
+/// Replace the whole config object (the advanced raw-JSON editor).
+async fn put_engine_config_raw(
+    Json(body): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    use orca_backend_common::engine_config as ec;
+
+    let config = body
+        .get("config")
+        .ok_or_else(|| ApiError::bad_request("missing 'config' object"))?
+        .clone();
+    if !config.is_object() {
+        return Err(ApiError::bad_request("'config' must be a JSON object"));
+    }
+
+    let backup = ec::write_config(&config)?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "path": ec::daemon_json_path().to_string_lossy(),
+        "backup": backup.map(|p| p.to_string_lossy().to_string()),
+        "restart_required": true,
+    })))
+}
+
+/// Restart the container engine so daemon-config changes take effect.
+async fn restart_engine() -> Result<impl IntoResponse, ApiError> {
+    orca_backend_common::environment::restart_docker_engine().await?;
+    Ok(Json(serde_json::json!({
+        "message": "Docker engine restart initiated",
+        "note": "The engine can take up to a minute to become reachable again.",
+    })))
+}
+
 // --- System Health ---
 
 async fn system_health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
@@ -4941,17 +5081,154 @@ async fn auto_register_stack_links(
     }
 }
 
-/// Generate a random alphanumeric password using the OS CSPRNG. Used for
-/// compose template deployments, so must be cryptographically strong —
-/// these values become database/session/API secrets.
-fn generate_password(len: usize) -> String {
+/// The random suffix shared by an auto-named deploy and its volumes.
+pub(crate) fn short_suffix() -> String {
     use rand::Rng;
     use rand::distributions::Alphanumeric;
     rand::rngs::OsRng
         .sample_iter(&Alphanumeric)
-        .take(len)
+        .take(4)
         .map(char::from)
+        .map(|c| c.to_ascii_lowercase())
         .collect()
+}
+
+/// Default name for a deploy that didn't specify one.
+///
+/// Appending a short random suffix is what keeps two deploys of the same
+/// template from colliding: the stack name becomes the compose project name and
+/// the container/volume prefix, so reusing `template.id` verbatim produced
+/// `mongodb`, `mongodb-1`… and — worse — made the *same* data volume
+/// (`mongodata`) be attached to two mongod instances, which then fought over
+/// the data-directory lock and crash-looped with exit 100.
+///
+/// An explicit name from the user is still used verbatim.
+pub(crate) fn default_deploy_name(template_id: &str) -> String {
+    format!("{template_id}-{}", short_suffix())
+}
+
+/// The suffix appended to a deploy's volumes.
+///
+/// Auto-named deploys are `{template_id}-{suffix}`, and users who accept the
+/// prefilled name in the App Catalog dialog send exactly that, so the template
+/// prefix is stripped to keep the volumes short (`mongodata-9ruc` rather than
+/// `mongodata-mongodb-9ruc`). Any other container name is used verbatim, which
+/// makes redeploys deterministic.
+pub(crate) fn deploy_volume_tag(template_id: &str, container_name: &str) -> String {
+    container_name
+        .strip_prefix(&format!("{template_id}-"))
+        .unwrap_or(container_name)
+        .to_string()
+}
+
+/// The named-volume sources a template ships with (e.g. `mongodata` for
+/// `mongodata:/data/db`). Only these are namespaced per deploy; see
+/// [`deploy_volume_mounts`].
+pub(crate) fn template_named_volumes(specs: &[String]) -> Vec<String> {
+    specs
+        .iter()
+        .filter_map(|s| s.split_once(':').map(|(source, _)| source))
+        .filter(|source| !is_host_path(source))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether a volume spec source is a host path (bind mount) rather than a
+/// named volume. Docker's rule: a leading `/`, `~`, `./` or `../` means a
+/// path; anything else is a volume name.
+pub(crate) fn is_host_path(source: &str) -> bool {
+    source.starts_with('/')
+        || source.starts_with('~')
+        || source.starts_with("./")
+        || source.starts_with("../")
+}
+
+/// Build the volume mounts for a single-container template deploy.
+///
+/// The *template's own* named volumes are namespaced with `tag` so two deploys
+/// of the same template each own their data; without this they shared e.g.
+/// `mongodata` and the two mongod processes fought over the data-directory lock
+/// (exit 100).
+///
+/// Everything else is passed through verbatim:
+/// - bind mounts, because a host path is data the user chose to share on
+///   purpose and rewriting it would point the mount at a directory that does
+///   not exist;
+/// - volume names the user typed themselves, because naming an existing volume
+///   is the only way to reattach data on purpose.
+pub(crate) fn deploy_volume_mounts(
+    specs: &[String],
+    tag: &str,
+    template_defaults: &[String],
+) -> Vec<orca_core::runtime::VolumeMount> {
+    specs
+        .iter()
+        .filter_map(|s| {
+            let (raw, target) = s.split_once(':')?;
+            let is_template_volume =
+                !is_host_path(raw) && template_defaults.iter().any(|d| d == raw);
+            let source = if is_template_volume {
+                format!("{raw}-{tag}")
+            } else {
+                raw.to_string()
+            };
+            Some(orca_core::runtime::VolumeMount {
+                source,
+                target: target.to_string(),
+                read_only: false,
+            })
+        })
+        .collect()
+}
+
+/// Replace any leftover [`PASSWORD_PLACEHOLDER`] in `value`.
+///
+/// Normally there is nothing to replace: `all_templates()` already substituted a
+/// random secret, and the client sends that value back in `env` /
+/// `compose_yaml`, so the password the user reads in the dialog is the one the
+/// container gets. This is the safety net for callers that post the raw
+/// placeholder (raw API, CLI, the AI agent tool) — `changeme` must never reach a
+/// container as a live credential.
+///
+/// `fallback` is minted on first use and reused for the rest of that one deploy,
+/// so a stack's database password and the service consuming it agree.
+pub(crate) fn resolve_placeholder(value: &str, fallback: &mut Option<String>) -> String {
+    if !value.contains(PASSWORD_PLACEHOLDER) {
+        return value.to_string();
+    }
+    let secret = fallback.get_or_insert_with(
+        orca_backend_common::templates::placeholder_secret,
+    );
+    value.replace(PASSWORD_PLACEHOLDER, secret)
+}
+
+/// Render a template's `notes` for a deploy response.
+///
+/// Deploys load the template *raw* (`raw_templates`), so `notes` still says
+/// `changeme` even though the client sent a real secret. Echoing the raw text
+/// would either print the placeholder or — worse — a freshly minted password that
+/// is not the one the container got. So the placeholder is replaced with the
+/// secret the container actually received: the client's value for the first
+/// generated key that survived into `env`, or the same fallback used for `env`.
+fn render_notes(
+    template: &AppTemplate,
+    env: &std::collections::HashMap<String, String>,
+    fallback: &mut Option<String>,
+) -> String {
+    if !template.notes.contains(PASSWORD_PLACEHOLDER) {
+        return template.notes.clone();
+    }
+    let secret = template
+        .generated_password_keys
+        .iter()
+        .find_map(|key| env.get(key))
+        .cloned()
+        .unwrap_or_else(|| {
+            fallback
+                .get_or_insert_with(orca_backend_common::templates::placeholder_secret)
+                .clone()
+        });
+    template.notes.replace(PASSWORD_PLACEHOLDER, &secret)
 }
 
 /// Generate cryptographically random bytes via the OS CSPRNG.
@@ -5232,18 +5509,29 @@ async fn deploy_template(
     Path(id): Path<String>,
     Json(overrides): Json<DeployTemplateOverrides>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let templates = orca_backend_common::templates::all_templates().await;
+    // Raw (placeholders intact) on purpose: the client was shown a substituted
+    // secret when the catalog was listed and sends it back in `env` /
+    // `compose_yaml`. Loading the listed form here would substitute a *new*
+    // secret and make the response disagree with the container.
+    let templates = orca_backend_common::templates::raw_templates().await;
     let template = templates
         .iter()
         .find(|t| t.id == id)
         .ok_or_else(|| anyhow::anyhow!("Template '{}' not found", id))?;
+
+    // Only used when a caller still sends the raw placeholder (scripts, CLI):
+    // minted once per deploy so every placeholder in one stack resolves to the
+    // same secret.
+    let mut fallback: Option<String> = None;
 
     // Check if this is a compose template
     let compose_yaml = overrides.compose_yaml.or_else(|| template.compose_yaml.clone());
 
     if let Some(yaml) = compose_yaml {
         // --- Compose stack deploy path ---
-        let stack_name = overrides.name.unwrap_or_else(|| template.id.clone());
+        let stack_name = overrides
+            .name
+            .unwrap_or_else(|| default_deploy_name(&template.id));
         // Validate the name and verify containment so an attacker-controlled
         // name can't escape the stacks directory via `..` or an absolute
         // path.
@@ -5265,11 +5553,11 @@ async fn deploy_template(
             }
         }
 
-        // Replace all occurrences of "changeme" with generated passwords.
-        // Each unique password placeholder gets a distinct generated value per service context,
-        // but for simplicity we use one password per stack.
-        let password = generate_password(24);
-        let final_yaml = yaml.replace("changeme", &password);
+        // Normally a no-op: the client sends the YAML it was shown, with the
+        // secret already substituted. Every remaining placeholder in the stack
+        // resolves to the same fallback secret so the DB password and the
+        // service that consumes it agree.
+        let final_yaml = resolve_placeholder(&yaml, &mut fallback);
 
         let compose_path = stack_dir.join("docker-compose.yml");
         std::fs::write(&compose_path, &final_yaml)
@@ -5322,6 +5610,26 @@ async fn deploy_template(
             .await
             .map_err(|e| anyhow::anyhow!("Compose deploy failed: {e}"))?;
 
+        // A non-zero exit means the stack did NOT come up (image pull failure,
+        // port conflict, invalid YAML, ...). Fail *before* any side effects —
+        // registering gateway routes or env links for a dead stack would leave
+        // the user with phantom routes pointing at nothing.
+        //
+        // Surface the *last* stderr line: Docker Compose prints the real error
+        // there, while line 1 is usually just the `version` deprecation warning.
+        if output.exit_code != 0 {
+            let detail = output
+                .stderr
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .next_back()
+                .unwrap_or("(no output)");
+            return Err(ApiError(anyhow::anyhow!(
+                "Compose deploy failed for stack '{stack_name}' (exit {}): {detail}",
+                output.exit_code
+            )));
+        }
+
         // Auto-register gateway routes from template or orca.yaml
         let gateway_routes = template
             .gateway_routes
@@ -5358,7 +5666,7 @@ async fn deploy_template(
                 "stack": stack_name,
                 "compose": true,
                 "working_dir": dir_str,
-                "notes": template.notes,
+                "notes": render_notes(template, &std::collections::HashMap::new(), &mut fallback),
                 "setup_guide": template.setup_guide,
                 "gateway_routes": registered_routes,
                 "output": {
@@ -5373,7 +5681,20 @@ async fn deploy_template(
     // --- Single container deploy path ---
     use orca_core::runtime::ContainerCreateOpts;
 
-    let container_name = overrides.name.unwrap_or_else(|| template.id.clone());
+    // Namespacing the template's named volumes matters because reusing them
+    // made a second deploy share the first one's data volume — two mongod
+    // instances then fought over `/data/db/mongod.lock` and crash-looped with
+    // exit 100.
+    //
+    // The volume tag is derived from the container name, so it is stable
+    // (redeploying a container reattaches its data) and the name the user sees
+    // in the dialog is the one the volumes get.
+    let container_name = overrides
+        .name
+        .clone()
+        .unwrap_or_else(|| default_deploy_name(&template.id));
+    let volume_tag = deploy_volume_tag(&template.id, &container_name);
+    let template_volumes = template_named_volumes(&template.default_volumes);
 
     let ports_str = overrides.ports.unwrap_or_else(|| template.default_ports.clone());
     let ports: Vec<orca_core::runtime::PortMapping> = ports_str
@@ -5397,29 +5718,20 @@ async fn deploy_template(
     let env: std::collections::HashMap<String, String> = env_list
         .iter()
         .filter_map(|s| {
-            let mut parts = s.splitn(2, '=');
-            let key = parts.next()?.to_string();
-            let val = parts.next().unwrap_or("").to_string();
-            Some((key, val))
+            let (key, raw) = s.split_once('=')?;
+            Some((
+                key.trim().to_string(),
+                resolve_placeholder(raw, &mut fallback),
+            ))
         })
         .collect();
 
     let vol_list = overrides.volumes.unwrap_or_else(|| template.default_volumes.clone());
-    let volumes: Vec<orca_core::runtime::VolumeMount> = vol_list
-        .iter()
-        .filter_map(|s| {
-            let parts: Vec<&str> = s.splitn(2, ':').collect();
-            if parts.len() == 2 {
-                Some(orca_core::runtime::VolumeMount {
-                    source: parts[0].to_string(),
-                    target: parts[1].to_string(),
-                    read_only: false,
-                })
-            } else {
-                None
-            }
-        })
-        .collect();
+    let volumes: Vec<orca_core::runtime::VolumeMount> =
+        deploy_volume_mounts(&vol_list, &volume_tag, &template_volumes);
+
+    // Built before `env` is moved into the create opts.
+    let notes = render_notes(template, &env, &mut fallback);
 
     let opts = ContainerCreateOpts {
         image: template.image.clone(),
@@ -5455,7 +5767,7 @@ async fn deploy_template(
         Json(serde_json::json!({
             "id": container_id,
             "name": container_name,
-            "notes": template.notes,
+            "notes": notes,
         })),
     ))
 }
@@ -7241,13 +7553,21 @@ async fn cleanup(
 
     // Remove config
     if scope == "config" || scope == "all" {
-        let config_path = orca_core::config::OrcaConfig::config_path()
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_default();
-        if config_path.exists() {
-            log.push(format!("Removing config at {}", config_path.display()));
-            let _ = std::fs::remove_dir_all(&config_path);
+        // Remove ONLY `config.json`.
+        //
+        // This used to `remove_dir_all` the config file's *parent*, which is
+        // the whole Orca data directory — it also deleted `ca/ca-key.pem` (the
+        // CA private key), `stacks/` (deployed compose files holding generated
+        // database passwords) and `community-templates.json`. A scope named
+        // "config" must not destroy secrets that nothing else can regenerate.
+        let config_file = orca_core::config::OrcaConfig::config_path();
+        if config_file.exists() {
+            log.push(format!("Removing config file at {}", config_file.display()));
+            if let Err(e) = std::fs::remove_file(&config_file) {
+                log.push(format!("  Failed to remove config file: {e}"));
+            }
+        } else {
+            log.push("No config file to remove".to_string());
         }
     }
 
@@ -7419,10 +7739,19 @@ async fn reconnect_runtime(State(state): State<Arc<AppState>>) -> Result<impl In
                 if let Some(path) = uri.strip_prefix("unix://") {
                     let exists = std::path::Path::new(path).exists();
                     if exists && connected_version.is_none() {
-                        if let Some((v, _docker_client)) = try_socket_ping(path).await {
+                        if let Some((v, docker_client)) = try_socket_ping(path).await {
                             log.push(format!("  Context socket: found \u{2713} \u{2192} Docker {v} \u{2713}"));
                             connected_version = Some(v);
                             connected_method = Some(format!("Docker context ({path})"));
+                            // Must be kept, not discarded: the hot-swap at the
+                            // end of this handler is driven by `connected_docker`
+                            // alone. Dropping it here meant that whenever the
+                            // active docker context resolved to a socket — the
+                            // normal case, e.g. after `docker context use
+                            // lima-orca` — this handler reported "connected, no
+                            // restart needed" while silently leaving the stale
+                            // runtime in place.
+                            connected_docker = Some(docker_client);
                         } else {
                             log.push("  Context socket: found but ping failed".to_string());
                         }
@@ -8829,5 +9158,167 @@ nested:
     fn test_parse_orca_yaml_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         assert!(parse_orca_yaml(dir.path()).is_none());
+    }
+    // ── default_deploy_name ──
+
+    #[test]
+    fn default_deploy_name_is_unique_and_compose_safe() {
+        // Two deploys of the same template must not collide: the name becomes
+        // the compose project name, so a clash also shares named volumes and
+        // two mongod instances would fight over the data-directory lock.
+        let a = default_deploy_name("mongodb");
+        let b = default_deploy_name("mongodb");
+        assert_ne!(a, b, "two deploys produced the same name: {a}");
+    
+        // Prefix is preserved so the name stays recognisable…
+        assert!(a.starts_with("mongodb-"), "{a}");
+        assert!(b.starts_with("mongodb-"), "{b}");
+    
+        // …and the result must satisfy docker-compose project rules, which
+        // `validate_stack_name` enforces.
+        assert!(validate_stack_name(&a).is_ok());
+        assert!(validate_stack_name(&b).is_ok());
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    }
+
+    // ── resolve_placeholder ──
+
+    #[test]
+    fn resolved_value_is_left_alone() {
+        // The normal path: `all_templates()` already substituted a secret and
+        // the client sent it back, so the deploy must not touch it.
+        let mut fallback = None;
+        assert_eq!(resolve_placeholder("Ab3dEf6hJk9lMn0p", &mut fallback), "Ab3dEf6hJk9lMn0p");
+        assert!(fallback.is_none(), "nothing should have been minted");
+    }
+
+    #[test]
+    fn leftover_placeholder_is_resolved() {
+        // Safety net for a caller that posts the raw placeholder: `changeme`
+        // must never become a live credential.
+        let mut fallback = None;
+        let got = resolve_placeholder("changeme", &mut fallback);
+        assert_eq!(got.len(), 16, "{got}");
+        assert_ne!(got, "changeme");
+        assert!(fallback.is_some());
+    }
+
+    #[test]
+    fn one_secret_per_deploy() {
+        // A stack that references the password twice (e.g. a DB and the service
+        // that consumes it) must get the *same* value in both places.
+        let mut fallback = None;
+        let a = resolve_placeholder("changeme", &mut fallback);
+        let b = resolve_placeholder("postgres://u:changeme@db/x", &mut fallback);
+        assert_eq!(b, format!("postgres://u:{a}@db/x"));
+    }
+
+    #[test]
+    fn one_secret_per_deploy_across_deploys() {
+        let mut first = None;
+        let mut second = None;
+        assert_ne!(
+            resolve_placeholder("changeme", &mut first),
+            resolve_placeholder("changeme", &mut second),
+        );
+    }
+
+    // ── deploy_volume_mounts ──
+
+    /// `defaults` mimics `template.default_volumes`.
+    fn mount_source(specs: &[&str], tag: &str, defaults: &[&str]) -> Vec<String> {
+        let specs: Vec<String> = specs.iter().map(|s| s.to_string()).collect();
+        let defaults = template_named_volumes(
+            &defaults.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+        deploy_volume_mounts(&specs, tag, &defaults)
+            .into_iter()
+            .map(|m| m.source)
+            .collect()
+    }
+
+    #[test]
+    fn template_named_volumes_skips_bind_mounts_and_malformed_specs() {
+        let got = template_named_volumes(&[
+            "mongodata:/data/db".to_string(),
+            "/Users/me/data:/data".to_string(),
+            "broken".to_string(),
+            "caddyconfig:/config".to_string(),
+        ]);
+        assert_eq!(got, vec!["mongodata".to_string(), "caddyconfig".to_string()]);
+    }
+
+    #[test]
+    fn volume_tag_strips_the_template_prefix() {
+        // `mongodb-9ruc` (auto-generated, or the prefilled dialog value) must
+        // yield `mongodata-9ruc`, not `mongodata-mongodb-9ruc`.
+        assert_eq!(deploy_volume_tag("mongodb", "mongodb-9ruc"), "9ruc");
+        assert_eq!(deploy_volume_tag("open-webui", "open-webui-ab12"), "ab12");
+        // Custom names are used verbatim…
+        assert_eq!(deploy_volume_tag("mongodb", "my-db"), "my-db");
+        // …including a name that merely equals the template id.
+        assert_eq!(deploy_volume_tag("mongodb", "mongodb"), "mongodb");
+    }
+
+    #[test]
+    fn named_volumes_are_suffixed() {
+        // The regression that motivated this: two deploys of the mongodb
+        // template both attached `mongodata`, so the second mongod could not
+        // lock /data/db and crash-looped with exit 100.
+        let defaults = template_named_volumes(&["mongodata:/data/db".to_string()]);
+        let mounts = deploy_volume_mounts(&["mongodata:/data/db".to_string()], "wq9k", &defaults);
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].source, "mongodata-wq9k");
+        assert_eq!(mounts[0].target, "/data/db");
+        assert!(!mounts[0].read_only);
+    }
+
+    #[test]
+    fn two_deploys_do_not_share_a_volume() {
+        let a = mount_source(&["mongodata:/data/db"], "aaaa", &["mongodata:/data/db"]);
+        let b = mount_source(&["mongodata:/data/db"], "bbbb", &["mongodata:/data/db"]);
+        assert_ne!(a, b, "two deploys shared a named volume");
+    }
+
+    #[test]
+    fn explicit_name_still_namespaces_its_volumes() {
+        // The App Catalog dialog supplies the volumes it prefilled from the
+        // template, so gating the suffix on "auto-named only" silently
+        // reintroduced the shared-volume bug for every GUI deploy.
+        let got = mount_source(&["mongodata:/data/db"], "mongodb", &["mongodata:/data/db"]);
+        assert_eq!(got, vec!["mongodata-mongodb".to_string()]);
+    }
+
+    #[test]
+    fn same_explicit_name_keeps_the_same_volume() {
+        // …while staying deterministic, so redeploying a named container
+        // reattaches its data instead of orphaning it under a new name.
+        let first = mount_source(&["mongodata:/data/db"], "mongodb", &["mongodata:/data/db"]);
+        let second = mount_source(&["mongodata:/data/db"], "mongodb", &["mongodata:/data/db"]);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn user_supplied_volume_names_are_kept_verbatim() {
+        // Naming a volume that the template does not ship is the only way to
+        // reattach existing data on purpose, so it must not be rewritten.
+        let got = mount_source(&["my-existing-data:/data/db"], "wq9k", &["mongodata:/data/db"]);
+        assert_eq!(got, vec!["my-existing-data".to_string()]);
+    }
+
+    #[test]
+    fn bind_mounts_are_left_alone() {
+        // Host paths are data the user deliberately shares; suffixing them
+        // would silently repoint the mount at a non-existent directory.
+        for spec in ["/Users/me/data:/data", "./rel:/rel", "../up:/up", "~/home:/home"] {
+            let got = mount_source(&[spec], "wq9k", &[spec]);
+            assert_eq!(got, vec![spec.split_once(':').unwrap().0.to_string()], "{spec}");
+        }
+    }
+
+    #[test]
+    fn malformed_volume_specs_are_skipped() {
+        let got = mount_source(&["no-colon", "mongodata:/data/db"], "wq9k", &["mongodata:/data/db"]);
+        assert_eq!(got, vec!["mongodata-wq9k".to_string()]);
     }
 }

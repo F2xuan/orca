@@ -38,6 +38,12 @@ async fn run_compose(
     };
 
     let mut cmd = Command::new(program);
+    // macOS app bundles launched from Finder/Dock inherit launchd's minimal
+    // PATH, which misses /usr/local/bin (Docker Desktop) and /opt/homebrew/bin.
+    // Without this, spawning the compose CLI fails with
+    // "No such file or directory (os error 2)" while the Docker API itself
+    // still works (the daemon connects over the socket, not the CLI).
+    cmd.env("PATH", crate::environment::extended_path());
     cmd.current_dir(working_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -63,10 +69,14 @@ async fn run_compose(
     let exit_code = output.status.code().unwrap_or(-1);
 
     if !output.status.success() {
-        tracing::warn!(
-            "Compose command exited with {exit_code}: {}",
-            stderr.lines().next().unwrap_or("(no output)")
-        );
+        // The *last* stderr line is the real failure; line 1 is often just the
+        // `version` deprecation warning, which made failures look misleading.
+        let detail = stderr
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .next_back()
+            .unwrap_or("(no output)");
+        tracing::warn!("Compose command exited with {exit_code}: {detail}");
     }
 
     Ok(ComposeOutput {

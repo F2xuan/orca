@@ -609,7 +609,14 @@ fn build_caddy_config(config: &GatewayConfig, k8s_routes: &[(String, String)]) -
         "handle": [{
             "handler": "file_server",
             "root": "/certs",
-            "index_names": ["index.html"]
+            "index_names": ["index.html"],
+            // `/certs` also holds the TLS material: `{hostname}-key.pem`, the
+            // Custom-mode `key.pem` (the user's REAL private key) and
+            // `caddy.json`. This route is the catch-all for unmatched hosts and
+            // `file_server` serves any path under its root, so without `hide` a
+            // plain `GET /<hostname>-key.pem` returned a private key with no
+            // authentication — and the data plane is published on 0.0.0.0.
+            "hide": ["*.pem", "*.key", "*.crt", "*.json"]
         }]
     });
 

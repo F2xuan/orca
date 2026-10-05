@@ -9,7 +9,19 @@ static CLI_CELL: OnceCell<&'static str> = OnceCell::const_new();
 
 /// Detect the container CLI command — prefers docker, falls back to podman.
 /// The result is cached after the first call.
-fn extended_path() -> String {
+///
+/// Extended PATH that includes common binary locations. macOS app bundles
+/// (launched from Finder/Dock) inherit launchd's minimal PATH, which misses
+/// `/usr/local/bin` (Docker Desktop) and `/opt/homebrew/bin` (Homebrew), so
+/// any child process resolved by name must be given this PATH explicitly.
+/// PATH with the standard Homebrew / local prefixes prepended.
+///
+/// A GUI launched from Finder or a login item (`start_on_login`) inherits
+/// launchd's minimal PATH — `/usr/bin:/bin:/usr/sbin:/sbin` — so neither
+/// `docker` (/usr/local/bin, or /opt/homebrew/bin) nor `limactl` is findable.
+/// Exposed so the daemon can normalise PATH **once** for the whole process
+/// instead of every call site having to remember it.
+pub fn extended_path() -> String {
     let current = std::env::var("PATH").unwrap_or_default();
     format!("/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/sbin:{current}")
 }
@@ -286,6 +298,11 @@ fn detect_platform() -> String {
 }
 
 /// Run a command and capture its stdout. Returns Ok(stdout) on success.
+/// Upper bound for any single `run_cmd` probe. Generous enough for a slow
+/// `docker info` or `limactl list`, short enough that a wedged runtime cannot
+/// hold a request open indefinitely.
+const RUN_CMD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub async fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new(program);
     // Use piped stdin (not null) — wsl.exe on Windows exits immediately with null stdin.
@@ -305,7 +322,21 @@ pub async fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
     cmd.env("PATH", &extended);
 
     let child = cmd.spawn().map_err(|e| e.to_string())?;
-    let result = child.wait_with_output().await.map_err(|e| e.to_string())?;
+
+    // Bound every probe. With no timeout, a process that accepts input but
+    // never exits (`docker info` against a wedged daemon, a stalled `limactl`)
+    // pinned this future — and therefore the calling HTTP handler — forever.
+    // macOS has no `timeout(1)`, so this must be done in-process.
+    let result = match tokio::time::timeout(RUN_CMD_TIMEOUT, child.wait_with_output()).await {
+        Ok(r) => r.map_err(|e| e.to_string())?,
+        Err(_) => {
+            return Err(format!(
+                "`{program} {}` timed out after {}s",
+                args.join(" "),
+                RUN_CMD_TIMEOUT.as_secs()
+            ));
+        }
+    };
 
     let stdout = decode_output(&result.stdout);
     let stderr = decode_output(&result.stderr);
@@ -1195,7 +1226,12 @@ pub async fn run_fix_streaming(action: &str, tx: tokio::sync::mpsc::Sender<Strin
             send("    This permanently deletes the existing Lima VM and builds a fresh one.\n".into()).await;
             send("    Containers, images, and volumes inside it are NOT preserved.\n\n".into()).await;
             // Force-stop first so delete can't fail on a running or wedged VM.
-            for name in ["orca", "docker", "default"] {
+            // NOTE: `default` is deliberately excluded. It is Lima's (and
+            // Colima's) conventional instance name, so it very likely belongs to
+            // something the user created outside Orca — and `limactl delete -f`
+            // is irreversible, while the confirmation dialog only promises to
+            // remove "the existing Lima VM".
+            for name in ["orca", "docker"] {
                 let _ = run_cmd("limactl", &["stop", "-f", name]).await;
                 let _ = run_cmd("limactl", &["delete", "-f", name]).await;
             }
@@ -1651,6 +1687,55 @@ pub async fn stop_docker_desktop() -> anyhow::Result<()> {
 #[cfg(not(target_os = "macos"))]
 pub async fn stop_docker_desktop() -> anyhow::Result<()> {
     Err(anyhow::anyhow!("Stopping Docker Desktop is only supported on macOS"))
+}
+
+/// Restart the container engine so daemon-config changes take effect.
+///
+/// `registry-mirrors` (like most of `daemon.json`) is read by `dockerd` only at
+/// **startup**, so a config edit stays inert until the engine restarts.
+#[cfg(target_os = "macos")]
+pub async fn restart_docker_engine() -> anyhow::Result<()> {
+    stop_docker_desktop().await?;
+
+    // Wait for the app to actually exit before relaunching: `open -a Docker` on
+    // an instance that is still shutting down merely re-activates the old
+    // process, and the engine would never pick up the new config.
+    for _ in 0..40 {
+        // `pgrep` exits non-zero when nothing matches, which `run_cmd` surfaces
+        // as Err — so an Err here means the process is gone.
+        if run_cmd("pgrep", &["-f", "Docker Desktop.app"]).await.is_err() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    run_cmd("open", &["-a", "Docker"])
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to relaunch Docker Desktop: {e}"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub async fn restart_docker_engine() -> anyhow::Result<()> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    // Docker Desktop for Linux runs as a *user* unit; a native dockerd runs as
+    // a system unit (which needs root).
+    let args: &[&str] = if std::path::Path::new(&home).join(".docker/desktop").exists() {
+        &["--user", "restart", "docker-desktop"]
+    } else {
+        &["restart", "docker"]
+    };
+    run_cmd("systemctl", args)
+        .await
+        .map_err(|e| anyhow::anyhow!("restarting the Docker engine failed: {e}"))?;
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub async fn restart_docker_engine() -> anyhow::Result<()> {
+    Err(anyhow::anyhow!(
+        "restarting the Docker engine is not supported on this platform"
+    ))
 }
 
 async fn check_podman_socket() -> HealthCheck {
@@ -2662,7 +2747,12 @@ pub async fn run_fix(action: &str) -> anyhow::Result<String> {
             // Non-streaming fallback for the destructive recreate (the GUI uses
             // the streaming path; this only runs if the SSE stream itself
             // failed). Confirmation already happened in the GUI.
-            for name in ["orca", "docker", "default"] {
+            // NOTE: `default` is deliberately excluded. It is Lima's (and
+            // Colima's) conventional instance name, so it very likely belongs to
+            // something the user created outside Orca — and `limactl delete -f`
+            // is irreversible, while the confirmation dialog only promises to
+            // remove "the existing Lima VM".
+            for name in ["orca", "docker"] {
                 let _ = run_cmd("limactl", &["stop", "-f", name]).await;
                 let _ = run_cmd("limactl", &["delete", "-f", name]).await;
             }
