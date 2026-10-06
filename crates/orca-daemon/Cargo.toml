@@ -50,3 +50,9 @@ rand = { workspace = true }
 rustls = { version = "0.23", features = ["ring"] }
 
 [dev-dependencies]
+# Real WebSocket client, used by the `real_socket_tests` module in `src/ws.rs`.
+# The liveness fix cannot be verified by unit-testing `recv_with_idle` alone: what
+# matters is whether a *peer that stops answering* is eventually dropped, and that
+# needs an actual socket on the other end. Matches the version axum 0.8 already
+# pulls in.
+tokio-tungstenite = "0.28"

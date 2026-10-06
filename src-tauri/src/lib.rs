@@ -190,23 +190,44 @@ pub fn run() {
                 use tauri::Manager;
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.with_webview(move |webview| {
-                        use cocoa::appkit::{NSWindow, NSWindowStyleMask, NSWindowTitleVisibility};
-                        use cocoa::base::{NO, YES, id};
+                        // `objc2-app-kit`, not the deprecated `cocoa` crate. The
+                        // constants map 1:1 (`Titled` = 1<<0, `Closable` = 1<<1,
+                        // `Miniaturizable` = 1<<2, `Resizable` = 1<<3,
+                        // `FullSizeContentView` = 1<<15 — identical to the old
+                        // `NS*WindowMask` values), so this is behaviour-preserving;
+                        // only the spelling and the safety contract changed.
+                        use objc2::rc::Retained;
+                        use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSWindowTitleVisibility};
+                        use objc2_foundation::MainThreadMarker;
+
+                        // SAFETY: `with_webview` runs on the main thread, and the
+                        // window is owned by the app for at least as long as this
+                        // closure. `ns_window()` returns the `NSWindow` backing this
+                        // webview; we only read and set window styling on it.
                         unsafe {
-                            let ns_window: id = webview.ns_window() as id;
-                            // Re-add titled mask for native rounded corners + traffic light buttons
+                            let ns_window: *mut NSWindow = webview.ns_window().cast();
+                            let Some(ns_window) = Retained::retain(ns_window) else {
+                                return;
+                            };
+                            // Taken to document (and check) that this must be the
+                            // main thread; the window APIs below are main-thread only.
+                            let _mtm = MainThreadMarker::new()
+                                .expect("with_webview must run on the main thread");
+
+                            // Re-add the titled mask for native rounded corners and
+                            // the traffic-light buttons.
                             let mut mask = ns_window.styleMask();
-                            mask |= NSWindowStyleMask::NSFullSizeContentViewWindowMask;
-                            mask |= NSWindowStyleMask::NSTitledWindowMask;
-                            mask |= NSWindowStyleMask::NSClosableWindowMask;
-                            mask |= NSWindowStyleMask::NSMiniaturizableWindowMask;
-                            mask |= NSWindowStyleMask::NSResizableWindowMask;
-                            ns_window.setStyleMask_(mask);
-                            // Hide the titlebar visually
-                            ns_window.setTitlebarAppearsTransparent_(YES);
-                            ns_window.setTitleVisibility_(NSWindowTitleVisibility::NSWindowTitleHidden);
-                            ns_window.setHasShadow_(YES);
-                            ns_window.setOpaque_(NO);
+                            mask |= NSWindowStyleMask::FullSizeContentView;
+                            mask |= NSWindowStyleMask::Titled;
+                            mask |= NSWindowStyleMask::Closable;
+                            mask |= NSWindowStyleMask::Miniaturizable;
+                            mask |= NSWindowStyleMask::Resizable;
+                            ns_window.setStyleMask(mask);
+                            // Hide the titlebar visually.
+                            ns_window.setTitlebarAppearsTransparent(true);
+                            ns_window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+                            ns_window.setHasShadow(true);
+                            ns_window.setOpaque(false);
                         }
                     });
                 }
@@ -249,11 +270,11 @@ pub fn run() {
             // On macOS, hide the window instead of quitting when closed
             // (the app lives in the menu bar)
             #[cfg(target_os = "macos")]
-            if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
-                if _window.label() == "main" {
-                    api.prevent_close();
-                    let _ = _window.hide();
-                }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = _event
+                && _window.label() == "main"
+            {
+                api.prevent_close();
+                let _ = _window.hide();
             }
         })
         .build(tauri::generate_context!())

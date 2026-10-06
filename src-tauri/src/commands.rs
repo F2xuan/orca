@@ -113,10 +113,10 @@ fn normalize_daemon_url(url: &str) -> String {
 
 /// Returns the currently active daemon API URL (always ends with /api/v1).
 fn daemon_url() -> String {
-    if let Ok(guard) = DAEMON_URL_OVERRIDE.read() {
-        if let Some((base, _, _)) = guard.as_ref() {
-            return format!("{}/api/v1", normalize_daemon_url(base));
-        }
+    if let Ok(guard) = DAEMON_URL_OVERRIDE.read()
+        && let Some((base, _, _)) = guard.as_ref()
+    {
+        return format!("{}/api/v1", normalize_daemon_url(base));
     }
     format!("{LOCAL_DAEMON_BASE}/api/v1")
 }
@@ -124,10 +124,10 @@ fn daemon_url() -> String {
 /// Returns the API token for the active host.
 /// For remote hosts, returns the remote token; for local, reads from config.
 fn active_api_token() -> Option<String> {
-    if let Ok(guard) = DAEMON_URL_OVERRIDE.read() {
-        if let Some((_, token, _)) = guard.as_ref() {
-            return Some(token.clone());
-        }
+    if let Ok(guard) = DAEMON_URL_OVERRIDE.read()
+        && let Some((_, token, _)) = guard.as_ref()
+    {
+        return Some(token.clone());
     }
     load_api_token()
 }
@@ -152,19 +152,18 @@ fn authed_client_with_timeout(timeout_secs: u64) -> reqwest::Client {
     }
 
     // Check if we should skip TLS verification for the active remote host
-    if let Ok(guard) = DAEMON_URL_OVERRIDE.read() {
-        if let Some((_, _, tls_verify)) = guard.as_ref() {
-            if !tls_verify {
-                builder = builder.danger_accept_invalid_certs(true);
-            }
-        }
+    if let Ok(guard) = DAEMON_URL_OVERRIDE.read()
+        && let Some((_, _, tls_verify)) = guard.as_ref()
+        && !tls_verify
+    {
+        builder = builder.danger_accept_invalid_certs(true);
     }
 
     let mut headers = reqwest::header::HeaderMap::new();
-    if let Some(token) = active_api_token() {
-        if let Ok(val) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")) {
-            headers.insert(reqwest::header::AUTHORIZATION, val);
-        }
+    if let Some(token) = active_api_token()
+        && let Ok(val) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+    {
+        headers.insert(reqwest::header::AUTHORIZATION, val);
     }
     builder
         .default_headers(headers)
@@ -532,6 +531,15 @@ pub async fn unsubscribe_container_logs(id: String) -> Result<(), String> {
 // --- Container Create & Run ---
 
 #[tauri::command]
+// The argument list *is* the IPC contract: Tauri deserialises the webview's
+// `invoke` payload straight into these parameters, so they cannot be folded into
+// a struct without changing the wire format for every caller. Note the existing
+// callers already disagree on casing (`RunContainerDialog.tsx` sends
+// `restartPolicy`/`cpuLimit`, `SettingsPage.tsx` sends `restart_policy`), which is
+// exactly why this is not the place for a drive-by refactor — a struct with one
+// `rename_all` would silently drop one caller's options, and silently losing a
+// restart policy or a memory limit is not something a linter should talk us into.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_and_run_container(
     image: String,
     name: Option<String>,
@@ -627,15 +635,15 @@ pub async fn create_and_run_container(
     if gpu.unwrap_or(false) {
         body["gpu"] = serde_json::json!(true);
     }
-    if let Some(net) = network {
-        if !net.is_empty() {
-            body["network"] = serde_json::json!(net);
-        }
+    if let Some(net) = network
+        && !net.is_empty()
+    {
+        body["network"] = serde_json::json!(net);
     }
-    if let Some(u) = user {
-        if !u.is_empty() {
-            body["user"] = serde_json::json!(u);
-        }
+    if let Some(u) = user
+        && !u.is_empty()
+    {
+        body["user"] = serde_json::json!(u);
     }
 
     // Create the container
@@ -1098,7 +1106,7 @@ pub async fn subscribe_events(app: tauri::AppHandle) -> Result<(), String> {
         use tokio_stream::StreamExt;
 
         let stream = resp.bytes_stream();
-        let mapped = stream.map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+        let mapped = stream.map(|r| r.map_err(std::io::Error::other));
         let reader = tokio_util::io::StreamReader::new(mapped);
         let mut lines = reader.lines();
 
@@ -2464,16 +2472,16 @@ pub async fn get_wsl_config() -> Result<serde_json::Value, String> {
                     in_wsl2_section = false;
                     continue;
                 }
-                if in_wsl2_section {
-                    if let Some((key, value)) = trimmed.split_once('=') {
-                        let key = key.trim().to_lowercase();
-                        let value = value.trim().to_string();
-                        match key.as_str() {
-                            "memory" => memory = value,
-                            "processors" => processors = value,
-                            "swap" => swap = value,
-                            _ => {}
-                        }
+                if in_wsl2_section
+                    && let Some((key, value)) = trimmed.split_once('=')
+                {
+                    let key = key.trim().to_lowercase();
+                    let value = value.trim().to_string();
+                    match key.as_str() {
+                        "memory" => memory = value,
+                        "processors" => processors = value,
+                        "swap" => swap = value,
+                        _ => {}
                     }
                 }
             }
@@ -3263,14 +3271,12 @@ pub async fn remove_remote_host(id: String) -> Result<(), String> {
     config.remote_hosts.retain(|h| h.id != id);
     config.save().map_err(|e| format!("{e}"))?;
     // Only switch back to local if the removed host was the active one
-    if let Some(removed_url) = removed_url {
-        if let Ok(mut guard) = DAEMON_URL_OVERRIDE.write() {
-            if let Some((active_url, _, _)) = guard.as_ref() {
-                if *active_url == removed_url {
-                    *guard = None;
-                }
-            }
-        }
+    if let Some(removed_url) = removed_url
+        && let Ok(mut guard) = DAEMON_URL_OVERRIDE.write()
+        && let Some((active_url, _, _)) = guard.as_ref()
+        && *active_url == removed_url
+    {
+        *guard = None;
     }
     Ok(())
 }
@@ -3296,26 +3302,26 @@ pub async fn switch_host(id: Option<String>) -> Result<serde_json::Value, String
 
 #[tauri::command]
 pub async fn get_active_host() -> Result<serde_json::Value, String> {
-    if let Ok(guard) = DAEMON_URL_OVERRIDE.read() {
-        if let Some((url, _, _)) = guard.as_ref() {
-            // Find the matching host name from config
-            if let Ok(config) = orca_core::config::OrcaConfig::load() {
-                if let Some(host) = config.remote_hosts.iter().find(|h| &h.url == url) {
-                    return Ok(serde_json::json!({
-                        "id": host.id,
-                        "name": host.name,
-                        "url": host.url,
-                        "is_remote": true,
-                    }));
-                }
-            }
+    if let Ok(guard) = DAEMON_URL_OVERRIDE.read()
+        && let Some((url, _, _)) = guard.as_ref()
+    {
+        // Find the matching host name from config
+        if let Ok(config) = orca_core::config::OrcaConfig::load()
+            && let Some(host) = config.remote_hosts.iter().find(|h| &h.url == url)
+        {
             return Ok(serde_json::json!({
-                "id": null,
-                "name": "Remote",
-                "url": url,
+                "id": host.id,
+                "name": host.name,
+                "url": host.url,
                 "is_remote": true,
             }));
         }
+        return Ok(serde_json::json!({
+            "id": null,
+            "name": "Remote",
+            "url": url,
+            "is_remote": true,
+        }));
     }
     Ok(serde_json::json!({
         "id": null,

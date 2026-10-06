@@ -1141,14 +1141,20 @@ async fn handle_terminal(socket: WebSocket, state: Arc<AppState>, container_id: 
 
     match state.rt().await.docker.start_exec(&exec_id, start_opts).await {
         Ok(StartExecResults::Attached { mut output, mut input }) => {
-            let (mut ws_sender, mut ws_receiver) = socket.split();
+            let (ws_sender, mut ws_receiver) = socket.split();
+
+            // All writes go through the pinger, which also keeps the connection
+            // alive while the user is not typing (see `ws.rs`). `Message::Text`
+            // and `Message::Binary` reach the client byte-for-byte as before.
+            let (out_tx, pinger) = crate::ws::spawn_pinger(ws_sender, crate::ws::PING_INTERVAL);
 
             // Container stdout/stderr -> WebSocket
+            let out_for_task = out_tx.clone();
             let mut output_task = tokio::spawn(async move {
                 use futures::stream::StreamExt;
                 while let Some(Ok(log_output)) = output.next().await {
                     let bytes = log_output.into_bytes();
-                    if ws_sender.send(Message::Binary(bytes.to_vec().into())).await.is_err() {
+                    if out_for_task.send(Message::Binary(bytes.to_vec().into())).await.is_err() {
                         break;
                     }
                 }
@@ -1158,8 +1164,24 @@ async fn handle_terminal(socket: WebSocket, state: Arc<AppState>, container_id: 
             let exec_id_for_input = exec.id.clone();
             let docker = state.rt().await.docker.clone();
             let mut input_task = tokio::spawn(async move {
-                while let Some(Ok(msg)) = ws_receiver.next().await {
+                loop {
+                    // A terminal is legitimately silent while the user is not
+                    // typing, so this deadline is only safe because the pinger
+                    // above is probing the peer: a live client answers every
+                    // ping, and a client that is gone stops answering.
+                    let msg = match crate::ws::recv_with_idle(
+                        &mut ws_receiver,
+                        crate::ws::IDLE_TIMEOUT,
+                    )
+                    .await
+                    {
+                        crate::ws::RecvOutcome::Message(msg) => msg,
+                        crate::ws::RecvOutcome::Closed | crate::ws::RecvOutcome::Idle => break,
+                    };
                     match msg {
+                        // The client's answer to our ping. Proof of life; nothing
+                        // to forward. Handled here *and* in `Message::Pong`.
+                        Message::Pong(_) => continue,
                         Message::Text(text) => {
                             // Check for resize message (JSON with cols/rows)
                             if let Ok(resize) = serde_json::from_str::<serde_json::Value>(&text)
@@ -1207,6 +1229,11 @@ async fn handle_terminal(socket: WebSocket, state: Arc<AppState>, container_id: 
                 _ = &mut output_task => { input_task.abort(); }
                 _ = &mut input_task => { output_task.abort(); }
             }
+            // Graceful close, bounded: `output_task` may still be holding its
+            // clone of the sender for a moment after `abort()`, so this drops the
+            // last sender, lets the pinger flush and send `Close`, and gives up
+            // after the grace period if the peer never drains.
+            crate::ws::shutdown_pinger(out_tx, pinger, Duration::from_millis(500)).await;
         }
         Ok(StartExecResults::Detached) => {
             let (mut ws_sender, _) = socket.split();
@@ -3845,8 +3872,7 @@ async fn compose_deploy_path(
         let detail = output
             .stderr
             .lines()
-            .filter(|l| !l.trim().is_empty())
-            .next_back()
+            .rfind(|l| !l.trim().is_empty())
             .unwrap_or("(no output)");
         return Err(ApiError(anyhow::anyhow!(
             "Compose deploy failed (exit {}): {detail}",
@@ -3996,7 +4022,7 @@ async fn k8s_enable_ws(
     Ok(ws.on_upgrade(move |socket| handle_k8s_enable(socket, state)))
 }
 
-async fn handle_k8s_enable(mut socket: WebSocket, state: Arc<AppState>) {
+async fn handle_k8s_enable(socket: WebSocket, state: Arc<AppState>) {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(100);
     let k8s = state.k8s.clone();
     let runtime = state.config.lock().await.kubernetes_runtime;
@@ -4016,13 +4042,42 @@ async fn handle_k8s_enable(mut socket: WebSocket, state: Arc<AppState>) {
         }
     });
 
-    // Forward progress lines to WebSocket
-    while let Some(line) = rx.recv().await {
-        if socket.send(Message::Text(line.into())).await.is_err() {
-            break;
+    // Forward progress lines to WebSocket.
+    //
+    // Note this task is deliberately left detached if the client goes away:
+    // installing k3s takes minutes and has real side effects, so a closed UI must
+    // not abort it half-way. Losing the client only stops the progress feed.
+    let (ws_sender, mut ws_receiver) = socket.split();
+    // An install can be silent for long stretches (image pulls, k3s bootstrap),
+    // so ping to keep the socket alive and to notice a client that vanished.
+    let (out_tx, pinger) = crate::ws::spawn_pinger(ws_sender, crate::ws::PING_INTERVAL);
+
+    loop {
+        tokio::select! {
+            line = rx.recv() => match line {
+                Some(line) => {
+                    if out_tx.send(Message::Text(line.into())).await.is_err() {
+                        break;
+                    }
+                }
+                // The enable task finished and dropped its sender.
+                None => break,
+            },
+            // Never read before, so a client that disconnected without a FIN
+            // kept this handler parked on `rx.recv()` for the whole install.
+            outcome = crate::ws::recv_with_idle(&mut ws_receiver, crate::ws::IDLE_TIMEOUT) => {
+                match outcome {
+                    // Any frame, including the `Pong` answering our ping.
+                    crate::ws::RecvOutcome::Message(_) => continue,
+                    crate::ws::RecvOutcome::Closed | crate::ws::RecvOutcome::Idle => break,
+                }
+            }
         }
     }
-    let _ = socket.close().await;
+
+    // The old code ended with `socket.close().await`; this preserves that (the
+    // pinger sends `Close` once every sender is gone) with a bounded wait.
+    crate::ws::shutdown_pinger(out_tx, pinger, Duration::from_millis(500)).await;
 }
 
 async fn k8s_disable(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
@@ -4696,8 +4751,12 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
         }
     };
 
-    let (mut ws_sender, mut ws_receiver) = socket.split();
+    let (ws_sender, mut ws_receiver) = socket.split();
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+
+    // Writes go through the pinger so an idle `kubectl exec` session (a user
+    // staring at a pod shell) is probed rather than mistaken for a dead peer.
+    let (out_tx, pinger) = crate::ws::spawn_pinger(ws_sender, crate::ws::PING_INTERVAL);
 
     // Stdout -> channel
     let tx_stdout = tx.clone();
@@ -4734,9 +4793,10 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
     });
 
     // Channel -> WebSocket
+    let out_for_task = out_tx.clone();
     let mut output_task = tokio::spawn(async move {
         while let Some(data) = rx.recv().await {
-            if ws_sender.send(Message::Binary(data.into())).await.is_err() {
+            if out_for_task.send(Message::Binary(data.into())).await.is_err() {
                 break;
             }
         }
@@ -4744,8 +4804,14 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
 
     // WebSocket -> stdin
     let mut input_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_receiver.next().await {
+        loop {
+            let msg =
+                match crate::ws::recv_with_idle(&mut ws_receiver, crate::ws::IDLE_TIMEOUT).await {
+                    crate::ws::RecvOutcome::Message(msg) => msg,
+                    crate::ws::RecvOutcome::Closed | crate::ws::RecvOutcome::Idle => break,
+                };
             match msg {
+                Message::Pong(_) => continue,
                 Message::Text(text) => {
                     // Ignore resize JSON messages (kubectl exec doesn't support dynamic resize)
                     if text.starts_with('{')
@@ -4799,6 +4865,9 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
     stdout_task.abort();
     stderr_task.abort();
     output_task.abort();
+    // Graceful close, bounded — see `shutdown_pinger`. This is what actually
+    // closes the socket rather than leaving it to the next failed ping.
+    crate::ws::shutdown_pinger(out_tx, pinger, Duration::from_millis(500)).await;
 
     // Explicitly ask the child to exit before it drops. `start_kill` is a
     // no-op if the process has already exited.
@@ -6170,8 +6239,7 @@ async fn deploy_template(
             let detail = output
                 .stderr
                 .lines()
-                .filter(|l| !l.trim().is_empty())
-                .next_back()
+                .rfind(|l| !l.trim().is_empty())
                 .unwrap_or("(no output)");
             return Err(ApiError(anyhow::anyhow!(
                 "Compose deploy failed for stack '{stack_name}' (exit {}): {detail}",
@@ -7028,28 +7096,42 @@ async fn handle_tunnel(socket: WebSocket, host: String, resolved: Vec<std::net::
     };
 
     let (mut tcp_read, mut tcp_write) = tcp_stream.into_split();
-    let (mut ws_sender, mut ws_receiver) = socket.split();
+    let (ws_sender, mut ws_receiver) = socket.split();
+
+    // A tunnel can be idle for a long time between bytes (an idle SSH session, a
+    // database connection nobody is querying), so silence is not evidence of
+    // death — the pinger probes the client instead, and its `Pong` is what keeps
+    // an idle tunnel open.
+    let (out_tx, pinger) = crate::ws::spawn_pinger(ws_sender, crate::ws::PING_INTERVAL);
 
     // TCP → WebSocket
+    let out_for_task = out_tx.clone();
     let mut tcp_to_ws = tokio::spawn(async move {
         let mut buf = vec![0u8; 32768];
         loop {
             match tcp_read.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    if ws_sender.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
+                    if out_for_task.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
                         break;
                     }
                 }
                 Err(_) => break,
             }
         }
-        let _ = ws_sender.close().await;
+        // Tell the client the tunnel is finished, rather than dropping the
+        // socket and leaving it to time out.
+        let _ = out_for_task.send(Message::Close(None)).await;
     });
 
     // WebSocket → TCP
     let mut ws_to_tcp = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_receiver.next().await {
+        loop {
+            let msg =
+                match crate::ws::recv_with_idle(&mut ws_receiver, crate::ws::IDLE_TIMEOUT).await {
+                    crate::ws::RecvOutcome::Message(msg) => msg,
+                    crate::ws::RecvOutcome::Closed | crate::ws::RecvOutcome::Idle => break,
+                };
             match msg {
                 Message::Binary(data) => {
                     if tcp_write.write_all(&data).await.is_err() {
@@ -7074,6 +7156,10 @@ async fn handle_tunnel(socket: WebSocket, host: String, resolved: Vec<std::net::
     // something else tore the connection down.
     tcp_to_ws.abort();
     ws_to_tcp.abort();
+    // Graceful specifically here: `tcp_to_ws` may have just queued a `Close`
+    // frame, and aborting the pinger would discard it, leaving the client to
+    // discover the dead tunnel by timing out instead of being told.
+    crate::ws::shutdown_pinger(out_tx, pinger, Duration::from_millis(500)).await;
     tracing::info!("Tunnel: closed connection to {host}:{port}");
 }
 
@@ -8089,19 +8175,19 @@ async fn cleanup(
             if let Ok(out) = output {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 for line in stdout.lines() {
-                    if let Ok(vm) = serde_json::from_str::<serde_json::Value>(line) {
-                        if let Some(name) = vm.get("name").and_then(|n| n.as_str()) {
-                            log.push(format!("  Stopping VM '{name}'..."));
-                            let _ = tokio::process::Command::new("limactl")
-                                .args(["stop", name])
-                                .output()
-                                .await;
-                            log.push(format!("  Deleting VM '{name}'..."));
-                            let _ = tokio::process::Command::new("limactl")
-                                .args(["delete", name])
-                                .output()
-                                .await;
-                        }
+                    if let Ok(vm) = serde_json::from_str::<serde_json::Value>(line)
+                        && let Some(name) = vm.get("name").and_then(|n| n.as_str())
+                    {
+                        log.push(format!("  Stopping VM '{name}'..."));
+                        let _ = tokio::process::Command::new("limactl")
+                            .args(["stop", name])
+                            .output()
+                            .await;
+                        log.push(format!("  Deleting VM '{name}'..."));
+                        let _ = tokio::process::Command::new("limactl")
+                            .args(["delete", name])
+                            .output()
+                            .await;
                     }
                 }
             }
@@ -8450,21 +8536,21 @@ async fn reconnect_runtime(State(state): State<Arc<AppState>>) -> Result<impl In
                                     // Wait for socket to appear
                                     let socket = format!("{home}/.lima/{name}/sock/docker.sock");
                                     for attempt in 1..=15 {
-                                        if std::path::Path::new(&socket).exists() {
-                                            if let Some((v, docker_client)) = try_socket_ping(&socket).await {
-                                                log.push(format!("  Socket ready \u{2713} \u{2192} Docker {v} \u{2713} (attempt {attempt})"));
-                                                connected_version = Some(v.clone());
-                                                connected_method = Some(format!("Lima VM '{name}' ({socket})"));
-                                                connected_docker = Some(docker_client);
-                                                break;
-                                            }
+                                        if std::path::Path::new(&socket).exists()
+                                            && let Some((v, docker_client)) = try_socket_ping(&socket).await
+                                        {
+                                            log.push(format!("  Socket ready \u{2713} \u{2192} Docker {v} \u{2713} (attempt {attempt})"));
+                                            connected_version = Some(v.clone());
+                                            connected_method = Some(format!("Lima VM '{name}' ({socket})"));
+                                            connected_docker = Some(docker_client);
+                                            break;
                                         }
                                         if attempt <= 14 {
                                             tokio::time::sleep(Duration::from_secs(2)).await;
                                         }
                                     }
                                     if connected_version.is_none() {
-                                        log.push(format!("  Socket not available after 30s"));
+                                        log.push("  Socket not available after 30s".to_string());
                                     }
                                 }
                                 Ok(r) => {

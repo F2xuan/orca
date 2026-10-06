@@ -1384,6 +1384,31 @@ fn write_landing_page(config: &GatewayConfig) -> Result<()> {
     Ok(())
 }
 
+/// Pull an image if it's not already present.
+async fn pull_if_needed(state: &AppState, image: &str) -> Result<()> {
+    let rt = state.rt().await;
+    let docker = &rt.docker;
+
+    // Check if image exists
+    if docker.inspect_image(image).await.is_ok() {
+        return Ok(());
+    }
+
+    tracing::info!("Pulling image {image}...");
+    use bollard::image::CreateImageOptions;
+    let options = CreateImageOptions {
+        from_image: image,
+        ..Default::default()
+    };
+    let stream = docker.create_image(Some(options), None, None);
+    let items: Vec<_> = tokio_stream::StreamExt::collect(stream).await;
+    for item in items {
+        item.map_err(|e| anyhow::anyhow!("Pull error: {e}"))?;
+    }
+    tracing::info!("Image {image} pulled successfully");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1754,27 +1779,3 @@ mod tests {
     }
 }
 
-/// Pull an image if it's not already present.
-async fn pull_if_needed(state: &AppState, image: &str) -> Result<()> {
-    let rt = state.rt().await;
-    let docker = &rt.docker;
-
-    // Check if image exists
-    if docker.inspect_image(image).await.is_ok() {
-        return Ok(());
-    }
-
-    tracing::info!("Pulling image {image}...");
-    use bollard::image::CreateImageOptions;
-    let options = CreateImageOptions {
-        from_image: image,
-        ..Default::default()
-    };
-    let stream = docker.create_image(Some(options), None, None);
-    let items: Vec<_> = tokio_stream::StreamExt::collect(stream).await;
-    for item in items {
-        item.map_err(|e| anyhow::anyhow!("Pull error: {e}"))?;
-    }
-    tracing::info!("Image {image} pulled successfully");
-    Ok(())
-}

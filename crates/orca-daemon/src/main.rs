@@ -21,6 +21,7 @@ mod operations;
 mod reconcile;
 mod registry;
 mod state;
+mod ws;
 
 use state::AppState;
 
