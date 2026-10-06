@@ -10,9 +10,16 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 mod agent;
+mod alerts;
 mod api;
+// (monitor is registered below, after build_manager)
 mod build_manager;
+mod cache;
+mod monitor;
 mod gateway;
+mod operations;
+mod reconcile;
+mod registry;
 mod state;
 
 use state::AppState;
@@ -39,6 +46,32 @@ fn default_socket_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"));
     runtime_dir.join("orca-daemon.sock")
+}
+
+/// Assemble the HTTP app, layer by layer.
+///
+/// Pulled out of `main` so that the *order of the layers* can be tested. The
+/// order is load-bearing and caused a real outage: an `OPTIONS` CORS preflight
+/// carries no credentials, so if `auth_middleware` sees one it answers 401 and
+/// the browser then refuses to send the real request — every page fails at once,
+/// and nothing else in the gate notices (a type-check, a unit test, or a curl
+/// *with* a token all pass happily).
+///
+/// In axum the **last** `.layer` is the **outermost**, so:
+///   * `cors_layer` must stay last, or preflights hit auth first;
+///   * `invalidate_caches` must stay inside `auth_middleware`, so an
+///     unauthenticated mutation cannot make the daemon drop its caches.
+fn app(state: Arc<AppState>) -> Router {
+    Router::new()
+        .nest("/api/v1", api::routes())
+        .layer(TraceLayer::new_for_http())
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            api::invalidate_caches,
+        ))
+        .layer(middleware::from_fn_with_state(state, api::auth_middleware))
+        .layer(api::cors_layer())
 }
 
 #[tokio::main]
@@ -93,11 +126,38 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("API token stored in {}", config_path.display());
     let api_token = token;
 
+    // Populate the egress redaction registry from the config just loaded, so
+    // secrets already on disk are scrubbed from the very first response rather
+    // than from the next save. `OrcaConfig::save` refreshes it on every change.
+    orca_core::redact::refresh_from_config(&config);
+    tracing::debug!(
+        "egress redaction registry holds {} secret value(s)",
+        orca_core::redact::registered_secret_count()
+    );
+
     // Warn if binding to a non-loopback address
     if args.bind != "127.0.0.1" && args.bind != "localhost" {
         tracing::warn!(
             "WARNING: Daemon binding to {} — the API will be network-accessible!",
             args.bind
+        );
+    }
+
+    // Converge anything a previous process left mid-flight *before* the API
+    // starts serving, so no request can observe a build that can never finish.
+    // Builds are persisted as `InProgress` and operations as `Running` before
+    // they do any work, so a crash or a `pkill orca-daemon` (a documented,
+    // everyday workflow) would otherwise leave both spinning forever.
+    let reconciled = reconcile::reconcile_on_startup().await;
+    if reconciled.is_clean() {
+        tracing::debug!("startup reconciliation: nothing to do");
+    } else {
+        tracing::warn!(
+            "startup reconciliation: {} build(s) marked failed, {} operation(s) marked interrupted, \
+             {} superseded alert row(s) compacted",
+            reconciled.builds_interrupted,
+            reconciled.operations_interrupted,
+            reconciled.alert_rows_dropped
         );
     }
 
@@ -114,6 +174,16 @@ async fn main() -> anyhow::Result<()> {
     let (events_tx, _) = broadcast::channel(256);
     let k8s = Arc::new(orca_backend_common::k8s::K3sManager::from_env());
     let state = Arc::new(AppState::new(config, runtime, k8s, events_tx.clone(), api_token));
+
+    // Periodic evaluation of container and disk state into alerts. Polls on
+    // purpose — see the module comment for why that is what makes two-strike
+    // confirmation correct for "it is down and not coming back".
+    {
+        let state_for_monitor = state.clone();
+        tokio::spawn(async move {
+            crate::monitor::run(state_for_monitor, crate::monitor::INTERVAL).await;
+        });
+    }
 
     {
         let state_for_events = state.clone();
@@ -149,11 +219,7 @@ async fn main() -> anyhow::Result<()> {
         run_scheduler(scheduler_state).await;
     });
 
-    let app = Router::new()
-        .nest("/api/v1", api::routes())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(state, api::auth_middleware));
+    let app = app(state);
 
     #[cfg(unix)]
     if let Some(socket_arg) = args.socket {
@@ -398,25 +464,61 @@ fn lima_path_env() -> String {
     )
 }
 
+/// Run `limactl` in its own process group with an optional hard timeout.
+///
+/// Every Lima invocation in the daemon goes through here rather than touching
+/// `tokio::process::Command` directly, which buys three things:
+///
+/// * **No orphaned trees.** `limactl start` / `limactl shell` spawn their own
+///   children (`ssh`, the host agent, `qemu`/`vz`). On timeout or daemon
+///   shutdown the whole group is SIGKILLed, so a wedged VM cannot leave a
+///   `limactl`+`ssh` pair holding the vsock or the config lock — the exact
+///   state `lima_force_recover` below exists to clean up.
+/// * **One PATH rule.** Callers no longer each have to remember
+///   `lima_path_env()`; missing it produced "No such file or directory" on
+///   launchd-inherited PATHs.
+/// * **A timeout is a value, not a control-flow rewrite.** Previously each
+///   call site hand-rolled `tokio::time::timeout(.., cmd.output())`, and a
+///   dropped future left the child running.
+#[cfg(target_os = "macos")]
+async fn lima_run(
+    path_env: &str,
+    args: &[&str],
+    timeout: Option<std::time::Duration>,
+) -> anyhow::Result<orca_core::proc::CommandOutput> {
+    let mut opts = orca_core::proc::CommandOptions::new().env("PATH", path_env);
+    opts.timeout = timeout;
+    orca_core::proc::run("limactl", args, opts).await
+}
+
+/// [`lima_run`] with the Homebrew-aware PATH that `limactl` needs.
+#[cfg(target_os = "macos")]
+async fn lima(
+    args: &[&str],
+    timeout: Option<std::time::Duration>,
+) -> anyhow::Result<orca_core::proc::CommandOutput> {
+    lima_run(&lima_path_env(), args, timeout).await
+}
+
 /// Find Orca's Lima VM and the status `limactl list` reports for it.
 /// Returns (name, status) where status is one of "Running", "Stopped", "Broken",
 /// or another Lima-defined string. Prefers "orca", then "docker" as fallback.
 #[cfg(target_os = "macos")]
 async fn find_lima_vm() -> Option<(&'static str, String)> {
-    use tokio::process::Command;
-    let out = Command::new("limactl")
-        .env("PATH", lima_path_env())
-        .args(["list", "--format", "{{.Name}}\t{{.Status}}"])
-        .output()
-        .await
-        .ok()?;
-    if !out.status.success() {
+    // A purely local query, but bounded so a wedged `limactl` cannot hang the
+    // startup path that calls this.
+    let out = lima(
+        &["list", "--format", "{{.Name}}\t{{.Status}}"],
+        Some(std::time::Duration::from_secs(20)),
+    )
+    .await
+    .ok()?;
+    if !out.success {
         return None;
     }
-    let text = String::from_utf8_lossy(&out.stdout);
     let mut orca = None;
     let mut docker = None;
-    for line in text.lines() {
+    for line in out.stdout.lines() {
         let mut it = line.split('\t');
         let name = it.next().unwrap_or("").trim();
         let status = it.next().unwrap_or("").trim().to_string();
@@ -434,18 +536,17 @@ async fn find_lima_vm() -> Option<(&'static str, String)> {
 /// "Broken" state, etc.) instead of a silent timeout.
 #[cfg(target_os = "macos")]
 async fn lima_start(name: &str) -> Result<(), String> {
-    use tokio::process::Command;
-    let out = Command::new("limactl")
-        .env("PATH", lima_path_env())
-        .args(["start", name])
-        .output()
+    // The cap is deliberately generous: a cold start downloads the base image,
+    // so this exists to reap a *wedged* start (the state `lima_force_recover`
+    // then cleans up), not to bound a legitimately slow first boot.
+    let out = lima(&["start", name], Some(std::time::Duration::from_secs(900)))
         .await
-        .map_err(|e| format!("spawn failed: {e}"))?;
-    if out.status.success() {
+        .map_err(|e| format!("spawn failed: {e:#}"))?;
+    if out.success {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let stderr = out.stderr.trim().to_string();
+        let stdout = out.stdout.trim().to_string();
         Err(if stderr.is_empty() { stdout } else { stderr })
     }
 }
@@ -457,21 +558,23 @@ async fn lima_start(name: &str) -> Result<(), String> {
 /// a host reboot, they can persist with no listener and confuse Bollard.
 #[cfg(target_os = "macos")]
 async fn lima_force_recover(name: &str) {
-    use tokio::process::Command;
     tracing::warn!("Lima VM '{name}': attempting force-stop recovery");
-    match Command::new("limactl")
-        .env("PATH", lima_path_env())
-        .args(["stop", "--force", name])
-        .output()
-        .await
+    match lima(
+        &["stop", "--force", name],
+        Some(std::time::Duration::from_secs(120)),
+    )
+    .await
     {
-        Ok(o) if o.status.success() => tracing::info!("Lima VM '{name}': force-stop succeeded"),
+        Ok(o) if o.success => tracing::info!("Lima VM '{name}': force-stop succeeded"),
+        Ok(o) if o.timed_out => {
+            tracing::warn!("Lima VM '{name}': force-stop timed out — killing VM process tree")
+        }
         Ok(o) => tracing::warn!(
             "Lima VM '{name}': force-stop returned {}: {}",
-            o.status,
-            String::from_utf8_lossy(&o.stderr).trim()
+            o.exit_code,
+            o.last_stderr_line()
         ),
-        Err(e) => tracing::warn!("Lima VM '{name}': force-stop spawn failed: {e}"),
+        Err(e) => tracing::warn!("Lima VM '{name}': force-stop spawn failed: {e:#}"),
     }
 
     remove_stale_lima_sockets(name);
@@ -587,8 +690,6 @@ async fn wait_for_lima_docker(name: &str, attempts: u32) -> Option<bollard::Dock
 /// logged, not fatal.
 #[cfg(target_os = "macos")]
 async fn ensure_ip_forward(name: &str) {
-    use tokio::process::Command;
-    use tokio::time::{Duration, timeout};
     // Persist via a drop-in (survives reboot, applied by systemd-sysctl before
     // dockerd on future boots). Only touch the live value / restart dockerd
     // when forwarding is actually off — see the doc comment above.
@@ -600,34 +701,32 @@ async fn ensure_ip_forward(name: &str) {
     // Hard cap so a wedged VM can't make `limactl shell` block forever. Callers
     // also fire-and-forget (`tokio::spawn`) so even a 30-second stall here
     // can't delay daemon startup or the connect path.
-    let fut = Command::new("limactl")
-        .env("PATH", lima_path_env())
-        // No `--workdir`: matches the established `limactl shell <vm> sudo
-        // sh -c …` pattern used elsewhere (k8s.rs, environment.rs). Lima is
-        // brew-installed and unpinned, so we avoid depending on any flag that
-        // a given Homebrew `lima` version might not have.
-        .args(["shell", name, "sudo", "sh", "-c", script])
-        .output();
-    let result = match timeout(Duration::from_secs(30), fut).await {
-        Ok(r) => r,
-        Err(_) => {
+    //
+    // No `--workdir`: matches the established `limactl shell <vm> sudo sh -c …`
+    // pattern used elsewhere (k8s.rs, environment.rs). Lima is brew-installed
+    // and unpinned, so we avoid depending on any flag that a given Homebrew
+    // `lima` version might not have.
+    match lima(
+        &["shell", name, "sudo", "sh", "-c", script],
+        Some(std::time::Duration::from_secs(30)),
+    )
+    .await
+    {
+        Ok(o) if o.success => {
+            tracing::debug!("Lima VM '{name}': IPv4 forwarding ensured");
+        }
+        Ok(o) if o.timed_out => {
             tracing::warn!(
                 "Lima VM '{name}': enabling IPv4 forwarding timed out after 30s — VM unresponsive, skipping"
             );
-            return;
-        }
-    };
-    match result {
-        Ok(o) if o.status.success() => {
-            tracing::debug!("Lima VM '{name}': IPv4 forwarding ensured");
         }
         Ok(o) => tracing::warn!(
             "Lima VM '{name}': enabling IPv4 forwarding returned {}: {}",
-            o.status,
-            String::from_utf8_lossy(&o.stderr).trim()
+            o.exit_code,
+            o.last_stderr_line()
         ),
         Err(e) => {
-            tracing::warn!("Lima VM '{name}': enabling IPv4 forwarding failed to spawn: {e}")
+            tracing::warn!("Lima VM '{name}': enabling IPv4 forwarding failed to spawn: {e:#}")
         }
     }
 }
@@ -648,34 +747,29 @@ async fn ensure_ip_forward(name: &str) {
 /// Best-effort: a failure here is logged, not fatal.
 #[cfg(target_os = "macos")]
 async fn ensure_sme_masked(name: &str) {
-    use tokio::process::Command;
-    use tokio::time::{Duration, timeout};
     let script = "if grep -qw sme /proc/cpuinfo && [ ! -f /etc/default/grub.d/99-orca-nosme.cfg ]; then \
                   echo 'GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX arm64.nosme\"' > /etc/default/grub.d/99-orca-nosme.cfg; \
                   update-grub; \
                   fi";
-    let fut = Command::new("limactl")
-        .env("PATH", lima_path_env())
-        .args(["shell", name, "sudo", "sh", "-c", script])
-        .output();
-    let result = match timeout(Duration::from_secs(60), fut).await {
-        Ok(r) => r,
-        Err(_) => {
-            tracing::warn!("Lima VM '{name}': SME mask check timed out after 60s — VM unresponsive, skipping");
-            return;
-        }
-    };
-    match result {
-        Ok(o) if o.status.success() => {
+    match lima(
+        &["shell", name, "sudo", "sh", "-c", script],
+        Some(std::time::Duration::from_secs(60)),
+    )
+    .await
+    {
+        Ok(o) if o.success => {
             tracing::debug!("Lima VM '{name}': SME mask ensured");
+        }
+        Ok(o) if o.timed_out => {
+            tracing::warn!("Lima VM '{name}': SME mask check timed out after 60s — VM unresponsive, skipping");
         }
         Ok(o) => tracing::warn!(
             "Lima VM '{name}': ensuring SME mask returned {}: {}",
-            o.status,
-            String::from_utf8_lossy(&o.stderr).trim()
+            o.exit_code,
+            o.last_stderr_line()
         ),
         Err(e) => {
-            tracing::warn!("Lima VM '{name}': ensuring SME mask failed to spawn: {e}")
+            tracing::warn!("Lima VM '{name}': ensuring SME mask failed to spawn: {e:#}")
         }
     }
 }
@@ -695,9 +789,6 @@ async fn ensure_sme_masked(name: &str) {
 /// on them; they're steered to Recreate elsewhere. Best-effort: logged, not fatal.
 #[cfg(target_os = "macos")]
 async fn ensure_static_usernet(name: &str) {
-    use tokio::process::Command;
-    use tokio::time::{Duration, timeout};
-
     // Detect Gen-2 from lima.yaml (cheap) and skip everything else.
     let home = std::env::var("HOME").unwrap_or_default();
     let lima_yaml = format!("{home}/.lima/{name}/lima.yaml");
@@ -710,24 +801,25 @@ async fn ensure_static_usernet(name: &str) {
         "set -eu\n{}",
         orca_backend_common::environment::orca_static_usernet_script()
     );
-    let fut = Command::new("limactl")
-        .env("PATH", lima_path_env())
-        .args(["shell", name, "sudo", "sh", "-c", &script])
-        .output();
-    match timeout(Duration::from_secs(30), fut).await {
-        Ok(Ok(o)) if o.status.success() => {
+    match lima(
+        &["shell", name, "sudo", "sh", "-c", &script],
+        Some(std::time::Duration::from_secs(30)),
+    )
+    .await
+    {
+        Ok(o) if o.success => {
             tracing::debug!("Lima VM '{name}': static usernet ensured");
         }
-        Ok(Ok(o)) => tracing::warn!(
-            "Lima VM '{name}': ensuring static usernet returned {}: {}",
-            o.status,
-            String::from_utf8_lossy(&o.stderr).trim()
-        ),
-        Ok(Err(e)) => {
-            tracing::warn!("Lima VM '{name}': ensuring static usernet failed to spawn: {e}")
-        }
-        Err(_) => {
+        Ok(o) if o.timed_out => {
             tracing::warn!("Lima VM '{name}': ensuring static usernet timed out after 30s — VM unresponsive, skipping")
+        }
+        Ok(o) => tracing::warn!(
+            "Lima VM '{name}': ensuring static usernet returned {}: {}",
+            o.exit_code,
+            o.last_stderr_line()
+        ),
+        Err(e) => {
+            tracing::warn!("Lima VM '{name}': ensuring static usernet failed to spawn: {e:#}")
         }
     }
 }
@@ -846,8 +938,6 @@ async fn connect_via_lima() -> Option<Arc<orca_backend_common::BollardRuntime>> 
 /// Returns true if changes were applied (caller should restart the VM).
 #[cfg(target_os = "macos")]
 async fn reconcile_lima_config(vm_name: &str, is_running: bool) -> bool {
-    use tokio::process::Command;
-
     let home = std::env::var("HOME").unwrap_or_default();
     let lima_yaml_path = format!("{home}/.lima/{vm_name}/lima.yaml");
     let path_env = format!(
@@ -960,20 +1050,22 @@ async fn reconcile_lima_config(vm_name: &str, is_running: bool) -> bool {
     if is_running {
         tracing::info!("Stopping Lima VM '{vm_name}' to apply config updates...");
         let stop_ok = matches!(
-            Command::new("limactl")
-                .env("PATH", &path_env)
-                .args(["stop", vm_name])
-                .output()
-                .await,
-            Ok(o) if o.status.success()
+            lima_run(
+                &path_env,
+                &["stop", vm_name],
+                Some(std::time::Duration::from_secs(120)),
+            )
+            .await,
+            Ok(o) if o.success
         );
         if !stop_ok {
             tracing::warn!("Lima VM '{vm_name}': graceful stop failed, forcing");
-            let _ = Command::new("limactl")
-                .env("PATH", &path_env)
-                .args(["stop", "--force", vm_name])
-                .output()
-                .await;
+            let _ = lima_run(
+                &path_env,
+                &["stop", "--force", vm_name],
+                Some(std::time::Duration::from_secs(120)),
+            )
+            .await;
         }
         // This is an Orca-initiated restart: clear the host-agent sockets the
         // way a full host reboot does for free, so the coming `limactl start`
@@ -985,36 +1077,37 @@ async fn reconcile_lima_config(vm_name: &str, is_running: bool) -> bool {
     // Remove the broken ignore rule if present
     if has_ignore_rule {
         // Filter out the portForward entry that has ignore: true
-        let _ = Command::new("limactl")
-            .env("PATH", &path_env)
-            .args([
+        let _ = lima_run(
+            &path_env,
+            &[
                 "edit",
                 vm_name,
                 "--set",
                 r#".portForwards = [.portForwards[] | select(.ignore != true)]"#,
-            ])
-            .output()
-            .await;
+            ],
+            Some(std::time::Duration::from_secs(60)),
+        )
+        .await;
         tracing::info!("Removed 'ignore: true' port forwarding rule");
     }
 
     // Apply each missing patch
     for (desc, set_expr) in &needed {
-        let output = Command::new("limactl")
-            .env("PATH", &path_env)
-            .args(["edit", vm_name, "--set", set_expr])
-            .output()
-            .await;
-        match output {
-            Ok(o) if o.status.success() => {
+        match lima_run(
+            &path_env,
+            &["edit", vm_name, "--set", *set_expr],
+            Some(std::time::Duration::from_secs(60)),
+        )
+        .await
+        {
+            Ok(o) if o.success => {
                 tracing::info!("Applied: {desc}");
             }
             Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                tracing::warn!("Failed to apply {desc}: {stderr}");
+                tracing::warn!("Failed to apply {desc}: {}", o.last_stderr_line());
             }
             Err(e) => {
-                tracing::warn!("Failed to run limactl edit for {desc}: {e}");
+                tracing::warn!("Failed to run limactl edit for {desc}: {e:#}");
             }
         }
     }

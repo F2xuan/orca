@@ -1,6 +1,7 @@
 import { createSignal, createEffect, onMount, Show, For } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonDelete, daemonErrorMessage, daemonGet } from "../lib/daemonClient";
 import type { MachineInfo, RegistryCredential, RemoteHost } from "../lib/types";
 import { showToast } from "../components/Toast";
 import { confirmDanger, confirm as confirmDialog } from "../components/ConfirmDialog";
@@ -25,7 +26,7 @@ function CertificateAuthoritySection() {
 
   onMount(async () => {
     try {
-      const info = await invoke("get_ca_info") as { subject: string; expires: string; fingerprint: string };
+      const info = await daemonGet<{ subject: string; expires: string; fingerprint: string }>("/ca/info");
       setCaInfo(info);
     } catch (e) {
       setCaError(String(e));
@@ -198,8 +199,8 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [schedBuildTargets, setSchedBuildTargets] = createSignal<any[]>([]);
 
   const refreshSchedules = async () => {
-    try { setSchedules((await invoke("list_schedules")) as any[]); } catch {}
-    try { setSchedBuildTargets((await invoke("list_build_targets")) as any[]); } catch {}
+    try { setSchedules(await daemonGet<any[]>("/schedules")); } catch {}
+    try { setSchedBuildTargets(await daemonGet<any[]>("/builds/targets")); } catch {}
   };
 
   const resetSchedForm = () => {
@@ -251,6 +252,9 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const [aiApiKey, setAiApiKey] = createSignal("");
   const [aiModel, setAiModel] = createSignal("");
   const [aiUrl, setAiUrl] = createSignal("");
+  // Highest agent tool risk the daemon will permit. The daemon owns the
+  // default (read-only); this just mirrors what it reports.
+  const [aiMaxRisk, setAiMaxRisk] = createSignal("read");
   const [aiSaving, setAiSaving] = createSignal(false);
   const [aiTesting, setAiTesting] = createSignal(false);
   const [aiTestResult, setAiTestResult] = createSignal<string | null>(null);
@@ -310,7 +314,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
 
   const refreshRegistries = async () => {
     try {
-      const result = (await invoke("list_registries")) as RegistryCredential[];
+      const result = await daemonGet<RegistryCredential[]>("/registries");
       setRegistries(result);
     } catch {
     }
@@ -340,7 +344,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const removeReg = async (server: string) => {
     if (!await confirmDanger(t("Remove Credential"), t("Remove the credential for '{server}'?", { server }))) return;
     try {
-      await invoke("remove_registry", { server });
+      await daemonDelete(`/registries/${encodeURIComponent(server)}`);
       showToast(t("Credential removed"), "success");
       await refreshRegistries();
     } catch (e) {
@@ -367,14 +371,14 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
 
   const refreshDeployRules = async () => {
     try {
-      const rules = (await invoke("list_deploy_rules")) as any[];
+      const rules = await daemonGet<any[]>("/deploy/rules");
       setDeployRules(rules);
     } catch {}
   };
 
   const refreshDeployHistory = async () => {
     try {
-      const history = (await invoke("list_deploy_history")) as any[];
+      const history = await daemonGet<any[]>("/deploy/history");
       setDeployHistory(history);
     } catch {}
   };
@@ -413,7 +417,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
     const label = rule?.name ? `"${rule.name}"` : "this rule";
     if (!(await confirmDanger(t("Delete deploy rule?"), t("Remove {label}? Webhooks matching this rule will stop auto-deploying.", { label })))) return;
     try {
-      await invoke("delete_deploy_rule", { id });
+      await daemonDelete(`/deploy/rules/${encodeURIComponent(id)}`);
       showToast(t("Rule deleted"), "success");
       await refreshDeployRules();
     } catch (e) {
@@ -532,12 +536,12 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
 
   const refreshGeneralSettings = async () => {
     try {
-      const settings = (await invoke("get_general_settings")) as {
+      const settings = await daemonGet<{
         start_on_login: boolean;
         show_tray_icon: boolean;
         telemetry: boolean;
         intercept_docker_desktop_urls: boolean;
-      };
+      }>("/settings/general");
       setStartOnLogin(settings.start_on_login);
       setShowTrayIcon(settings.show_tray_icon);
       setTelemetry(settings.telemetry);
@@ -577,14 +581,15 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
 
   const refreshAiSettings = async () => {
     try {
-      const settings = (await invoke("get_ai_settings")) as {
+      const settings = await daemonGet<{
         provider: string;
         has_anthropic_key: boolean;
         has_openai_key: boolean;
         anthropic_model: string;
         openai_model: string;
         openai_url: string;
-      };
+        max_risk?: string;
+      }>("/settings/ai");
       // Detect Ollama: custom provider with 11434 URL
       const isOllama = settings.provider === "custom" && (settings.openai_url || "").includes("11434");
       setAiProvider(isOllama ? "ollama" : settings.provider as AiProviderType);
@@ -594,6 +599,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
         settings.provider === "anthropic" ? settings.anthropic_model : settings.openai_model
       );
       setAiUrl(settings.openai_url || "");
+      setAiMaxRisk(settings.max_risk || "read");
       setAiApiKey("");
       // Load available models
       loadModels();
@@ -604,7 +610,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const loadModels = async () => {
     setLoadingModels(true);
     try {
-      const result = (await invoke("list_ai_models")) as { models: string[] };
+      const result = await daemonGet<{ models: string[] }>("/settings/ai/models");
       // Strip "models/" prefix that some providers add (e.g. Gemini)
       const cleaned = (result.models || []).map(m => m.replace(/^models\//, ""));
       setAvailableModels(cleaned);
@@ -625,6 +631,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
         apiKey: aiApiKey(),
         model: aiModel(),
         url: aiUrl() || null,
+        maxRisk: aiMaxRisk(),
       });
       showToast(t("AI settings saved"), "success");
       await refreshAiSettings();
@@ -836,7 +843,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
   const refreshLimaSettings = async () => {
     if (!isMac) return;
     try {
-      const settings = (await invoke("get_lima_settings")) as {
+      const settings = await daemonGet<{
         available: boolean;
         name?: string;
         status?: string;
@@ -845,7 +852,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
         disk?: number;
         recommended_memory_gib?: number;
         host_memory_gib?: number;
-      };
+      }>("/settings/lima");
       setLimaAvailable(settings.available);
       setLimaRecommendedMemoryGib(settings.recommended_memory_gib ?? null);
       setLimaHostMemoryGib(settings.host_memory_gib ?? null);
@@ -1388,6 +1395,22 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                         onChange={(v) => setAiModel(v)}
                       />
                     </Show>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label">{t("Maximum agent tool risk")}</label>
+                    <Dropdown
+                      value={aiMaxRisk()}
+                      options={[
+                        { value: "read", label: t("Read only (recommended)") },
+                        { value: "write", label: t("Read and write") },
+                        { value: "destructive", label: t("Read, write, and destructive") },
+                      ]}
+                      onChange={(v) => setAiMaxRisk(v)}
+                    />
+                    <span class="form-hint">
+                      {t("Tools the AI agent may run on its own. \"Read only\" blocks anything that changes or deletes containers, images, or stacks — an agent can be misled by text it reads, so keep this as low as you can.")}
+                    </span>
                   </div>
 
                   <div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
@@ -2101,8 +2124,8 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                             <button class="btn btn-sm btn-danger" onClick={async () => {
                               const label = sched.name ? `"${sched.name}"` : "this schedule";
                               if (!(await confirmDanger(t("Delete schedule?"), t("Remove {label}? It will stop running on its cron trigger.", { label })))) return;
-                              try { await invoke("delete_schedule", { id: sched.id }); showToast(t("Deleted"), "success"); await refreshSchedules(); }
-                              catch (e) { showToast(t("Failed: {error}", { error: String(e) }), "error"); }
+                              try { await daemonDelete(`/schedules/${encodeURIComponent(sched.id)}`); showToast(t("Deleted"), "success"); await refreshSchedules(); }
+                              catch (e) { showToast(t("Failed: {error}", { error: daemonErrorMessage(e) }), "error"); }
                             }} title={t("Delete")}>
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
                             </button>

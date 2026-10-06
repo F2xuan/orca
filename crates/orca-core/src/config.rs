@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent_tools::ToolRisk;
 use crate::machine::MachineConfig;
 
 /// A remote orca-daemon host.
@@ -149,6 +150,18 @@ pub struct OrcaConfig {
     /// Anthropic model to use (default: claude-sonnet-4-20250514)
     #[serde(default = "default_anthropic_model")]
     pub anthropic_model: String,
+    /// Highest tool risk the AI agent is allowed to invoke.
+    ///
+    /// Defaults to `read`. Agent tools are driven by an LLM that may be
+    /// following instructions embedded in the data it was asked to inspect — a
+    /// container's log lines, a fetched page, a commit message. Read-only by
+    /// default means a successful prompt injection is still embarrassing, but
+    /// cannot delete the user's containers, images, or stacks. Raising the
+    /// ceiling is an explicit, discoverable act.
+    ///
+    /// The tiers are cumulative: `write` also permits `read`.
+    #[serde(default = "default_agent_risk")]
+    pub agent_risk: ToolRisk,
     /// Remote orca-daemon hosts.
     #[serde(default)]
     pub remote_hosts: Vec<RemoteHost>,
@@ -474,6 +487,11 @@ fn default_openai_url() -> String {
 fn default_openai_model() -> String {
     "gpt-4o".into()
 }
+fn default_agent_risk() -> ToolRisk {
+    // Read-only, deliberately. See the field's doc comment.
+    ToolRisk::Read
+}
+
 fn default_anthropic_model() -> String {
     "claude-sonnet-4-20250514".into()
 }
@@ -506,6 +524,7 @@ impl Default for OrcaConfig {
             openai_url: default_openai_url(),
             openai_model: default_openai_model(),
             anthropic_model: default_anthropic_model(),
+            agent_risk: default_agent_risk(),
             remote_hosts: Vec::new(),
             webhook_secret: None,
             deploy_rules: Vec::new(),
@@ -610,6 +629,30 @@ impl OrcaConfig {
         // Serialize concurrent ensure_token() callers (e.g. simultaneous
         // daemon and CLI first-boot) so only one generates a token.
         let lock = Self::acquire_save_lock()?;
+
+        // Re-read the token from disk *while holding the lock*. The lock only
+        // serializes writes; without this re-read the read-modify-write cycle
+        // around it still races:
+        //
+        //   A: load (no token) ─────────────► lock ► generate t1 ► save t1 ► unlock
+        //   B:      load (no token) ─────────────────────► lock ► generate t2 ► save t2
+        //
+        // B's stale in-memory view wins on disk while A keeps running with t1,
+        // so the daemon and the CLI end up disagreeing about the token and
+        // every request from one of them 401s until the file is deleted. Only
+        // `api_token` is adopted here — the caller may have already mutated
+        // other fields on `self`, which must not be reverted.
+        if let Ok(disk) = Self::load()
+            && let Some(disk_token) = disk.api_token.as_deref()
+            && !disk_token.is_empty()
+        {
+            self.api_token = Some(disk_token.to_string());
+            return self
+                .api_token
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("api_token not set after ensure_token"));
+        }
+
         if self.api_token.as_deref().is_none_or(str::is_empty) {
             let token = generate_random_token()?;
             self.api_token = Some(token);
@@ -764,6 +807,13 @@ impl OrcaConfig {
                 let _ = dir.sync_all();
             }
         }
+
+        // Refresh the egress redaction registry from what was just persisted.
+        //
+        // This lives here, rather than at each call site, so that a credential
+        // becomes un-leakable the moment it is saved and no future caller can
+        // forget to do it. The cost is a handful of string copies per save.
+        crate::redact::refresh_from_config(self);
 
         Ok(())
     }

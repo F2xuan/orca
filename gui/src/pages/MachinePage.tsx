@@ -1,6 +1,8 @@
-import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
+import { createSignal, createEffect, onMount, Show, For } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { useSystemHealth } from "../lib/pollStore";
+import { daemonPost } from "../lib/daemonClient";
 import type { MachineInfo, SystemHealth } from "../lib/types";
 import { formatBytes } from "../lib/format";
 import { showToast } from "../components/Toast";
@@ -59,13 +61,17 @@ export default function MachinePage() {
     }
   };
 
+  // Shared with the titlebar and the status bar: one timer for `system_health`
+  // instead of three. A failed refresh keeps the last good value and this page
+  // simply keeps showing it, which is what the previous `catch {}` did.
+  const healthPoll = useSystemHealth(15_000);
+  createEffect(() => {
+    const h = healthPoll.data();
+    if (h) setHealth(h);
+  });
+
   const refreshHealth = async () => {
-    try {
-      const h = (await invoke("system_health")) as SystemHealth;
-      setHealth(h);
-    } catch {
-      // Daemon not ready
-    }
+    await healthPoll.refresh();
   };
 
   const refresh = async () => {
@@ -81,7 +87,7 @@ export default function MachinePage() {
     if (!ok) return;
     setPruning(true);
     try {
-      await invoke("prune_images");
+      await daemonPost("/images/prune");
       showToast(t("Docker system pruned successfully"), "success");
       await refreshHealth();
     } catch (e) {
@@ -93,9 +99,9 @@ export default function MachinePage() {
   };
 
   onMount(() => {
+    // The repeating refresh now comes from the shared poll; subscribing to it
+    // performs the first fetch.
     refresh();
-    const interval = setInterval(refreshHealth, 15_000);
-    onCleanup(() => clearInterval(interval));
   });
 
   return (

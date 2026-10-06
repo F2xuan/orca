@@ -1,6 +1,7 @@
 import { createSignal, onMount, For, Show } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonGet, daemonPost } from "../lib/daemonClient";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import type { GatewayStatus, GatewayRoute, Container, ComposeProject, StackLinkGroup, TraefikStatus } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
@@ -92,7 +93,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
   const loadConfig = async () => {
     try {
-      const config = (await invoke("gateway_get_config")) as any;
+      const config = await daemonGet<any>("/gateway/config");
       setCfgDomain(config.domain || "localhost");
       setCfgHttpPort(String(config.http_port || 80));
       setCfgHttpsPort(String(config.https_port || 443));
@@ -138,7 +139,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
   const fetchStatus = async () => {
     try {
-      const s = (await invoke("gateway_status")) as GatewayStatus;
+      const s = await daemonGet<GatewayStatus>("/gateway/status");
       setStatus(s);
     } catch (e) {
       logError(`Failed to fetch gateway status: ${e}`);
@@ -148,7 +149,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
   const fetchRoutes = async () => {
     try {
-      const r = (await invoke("gateway_list_routes")) as GatewayRoute[];
+      const r = await daemonGet<GatewayRoute[]>("/gateway/routes");
       setRoutes(r);
     } catch (e) {
       logError(`Failed to fetch gateway routes: ${e}`);
@@ -157,7 +158,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
   const fetchLinks = async () => {
     try {
-      const links = (await invoke("gateway_get_links")) as StackLinkGroup[];
+      const links = await daemonGet<StackLinkGroup[]>("/gateway/links");
       setStackLinks(links || []);
     } catch {
       // Links may not be available yet
@@ -166,14 +167,14 @@ export default function GatewayPage(props: GatewayPageProps) {
 
   const fetchDismissed = async () => {
     try {
-      const result = (await invoke("gateway_get_dismissed")) as { dismissed: string[] };
+      const result = await daemonGet<{ dismissed: string[] }>("/gateway/dismissed-suggestions");
       setDismissedKeys(result.dismissed || []);
     } catch {}
   };
 
   const fetchTraefikStatus = async () => {
     try {
-      const ts = (await invoke("gateway_traefik_status")) as TraefikStatus;
+      const ts = await daemonGet<TraefikStatus>("/gateway/traefik-status");
       setTraefikStatus(ts);
       // Only prime the form fields on first fetch or when the user hasn't
       // started editing — otherwise a refresh (Ctrl-R / host-switch) would
@@ -233,8 +234,8 @@ export default function GatewayPage(props: GatewayPageProps) {
   const fetchContainers = async () => {
     try {
       const [c, s] = await Promise.all([
-        invoke("list_containers") as Promise<Container[]>,
-        invoke("list_stacks") as Promise<ComposeProject[]>,
+        daemonGet<Container[]>("/containers"),
+        daemonGet<ComposeProject[]>("/stacks"),
       ]);
       setContainers((c || []).filter((x) => x.name !== "orca-gateway"));
       setPickerStacks(s || []);
@@ -270,7 +271,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
   const clearDismissed = async () => {
     try {
-      await invoke("gateway_clear_dismissed");
+      await daemonPost("/gateway/clear-dismissed");
       setDismissedKeys([]);
       showToast(t("Dismissed suggestions cleared"), "success");
     } catch (e) {
@@ -309,7 +310,7 @@ export default function GatewayPage(props: GatewayPageProps) {
 
   const handleStop = async () => {
     try {
-      await invoke("gateway_stop");
+      await daemonPost("/gateway/stop");
       showToast(t("Gateway stopped"), "success");
       setStartError(null);
       await refresh();

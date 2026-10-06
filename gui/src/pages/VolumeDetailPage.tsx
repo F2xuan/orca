@@ -1,6 +1,6 @@
 import { createSignal, onMount, For, Show } from "solid-js";
 import { t } from "../lib/i18n";
-import { invoke } from "@tauri-apps/api/core";
+import { daemonDelete, daemonErrorMessage, daemonGet } from "../lib/daemonClient";
 import type { Volume, Container } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
 import { formatTimestamp } from "../lib/format";
@@ -27,6 +27,22 @@ interface FileEntry {
   is_dir: boolean;
 }
 
+/**
+ * The daemon path for a volume's file listing.
+ *
+ * The `path` query is **omitted** rather than sent empty, matching what the
+ * Tauri command did (`String::new()` for `None`) — an absent path is the volume
+ * root, and there is no reason to make the daemon distinguish `?path=` from no
+ * query at all.
+ */
+function volumeFilesPath(volume: string, path?: string | null): string {
+  const base = `/volumes/${encodeURIComponent(volume)}/files`;
+  // `encodeURIComponent` differs from Rust's `urlencoding::encode` on
+  // `!*'()`, which it leaves literal. Both forms decode to the same value
+  // server-side, so the difference is not observable.
+  return path ? `${base}?path=${encodeURIComponent(path)}` : base;
+}
+
 export default function VolumeDetailPage(props: VolumeDetailPageProps) {
   const [volume, setVolume] = createSignal<Volume | null>(null);
   const [activeTab, setActiveTab] = createSignal<DetailTab>("overview");
@@ -46,7 +62,7 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
 
   const fetchVolume = async () => {
     try {
-      const vols = (await invoke("list_volumes")) as Volume[];
+      const vols = await daemonGet<Volume[]>("/volumes");
       const v = vols.find((x) => x.name === props.volumeName);
       if (v) setVolume(v);
     } catch {
@@ -58,7 +74,9 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
   const fetchContainers = async () => {
     setContainersLoading(true);
     try {
-      const result = (await invoke("volume_containers", { name: props.volumeName })) as Container[];
+      const result = await daemonGet<Container[]>(
+        `/volumes/${encodeURIComponent(props.volumeName)}/containers`,
+      );
       setContainers(result);
     } catch {
     }
@@ -71,10 +89,9 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
     setFileContentPath(null);
     setFileError(null);
     try {
-      const result = (await invoke("volume_list_files", {
-        name: props.volumeName,
-        path: path || null,
-      })) as { entries: FileEntry[]; path: string };
+      const result = await daemonGet<{ entries: FileEntry[]; path: string }>(
+        volumeFilesPath(props.volumeName, path),
+      );
       setFiles(result.entries);
       setCurrentPath(result.path || "");
     } catch (e) {
@@ -90,10 +107,9 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
   const readFile = async (path: string) => {
     setFileContentLoading(true);
     try {
-      const result = (await invoke("volume_read_file", {
-        name: props.volumeName,
-        path,
-      })) as { content: string };
+      const result = await daemonGet<{ content: string }>(
+        `/volumes/${encodeURIComponent(props.volumeName)}/file?path=${encodeURIComponent(path)}`,
+      );
       setFileContent(result.content);
       setFileContentPath(path);
     } catch (e) {
@@ -122,12 +138,12 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
     if (!await confirmDanger(t("Remove Volume"), t("Remove volume \"{name}\"? This will permanently delete the volume data.", { name: props.volumeName }))) return;
     setRemoving(true);
     try {
-      await invoke("remove_volume", { name: props.volumeName });
+      await daemonDelete(`/volumes/${encodeURIComponent(props.volumeName)}`);
       showToast(t("Volume \"{name}\" removed", { name: props.volumeName }), "success");
       props.onBack();
     } catch (err) {
       logError(`Failed to remove volume: ${err}`, `Volume "${props.volumeName}"`);
-      showToast(t("Failed to remove volume: {error}", { error: String(err) }), "error");
+      showToast(t("Failed to remove volume: {error}", { error: daemonErrorMessage(err) }), "error");
       setRemoving(false);
     }
   };
@@ -162,10 +178,9 @@ export default function VolumeDetailPage(props: VolumeDetailPageProps) {
       // Fetch root-level files if not already loaded
       let entries = files();
       if (!fileBrowsingStarted() || entries.length === 0) {
-        const result = (await invoke("volume_list_files", {
-          name: props.volumeName,
-          path: null,
-        })) as { entries: FileEntry[]; path: string };
+        const result = await daemonGet<{ entries: FileEntry[]; path: string }>(
+          volumeFilesPath(props.volumeName),
+        );
         entries = result.entries;
       }
       // Format as text

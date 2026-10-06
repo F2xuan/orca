@@ -1,6 +1,7 @@
-import { createSignal, onMount, onCleanup, For, Show, JSX } from "solid-js";
+import { createSignal, createEffect, onMount, onCleanup, For, Show, JSX } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n";
+import { useContainers, useImages } from "../lib/pollStore";
 import type { Page } from "../App";
 import type { RemoteHost } from "../lib/types";
 
@@ -151,15 +152,21 @@ export default function Sidebar(props: SidebarProps) {
   const [imageCount, setImageCount] = createSignal(0);
   const [hasRemoteHosts, setHasRemoteHosts] = createSignal(false);
 
-  const fetchCounts = async () => {
-    try {
-      const containers = (await invoke("list_containers")) as any[];
-      setContainerCount(containers.length);
-    } catch { /* ignore */ }
-    try {
-      const images = (await invoke("list_images")) as any[];
-      setImageCount(images.length);
-    } catch { /* ignore */ }
+  // The two counts come from the shared poll — one request per resource, shared
+  // with any page that reads the same key — instead of three calls on the
+  // sidebar's own 5s timer.
+  const containersPoll = useContainers(5_000);
+  const imagesPoll = useImages(5_000);
+  createEffect(() => {
+    const containers = containersPoll.data();
+    if (containers) setContainerCount(containers.length);
+  });
+  createEffect(() => {
+    const images = imagesPoll.data();
+    if (images) setImageCount(images.length);
+  });
+
+  const fetchRemoteHosts = async () => {
     try {
       const remotes = (await invoke("list_remote_hosts")) as RemoteHost[];
       setHasRemoteHosts(remotes.length > 0);
@@ -167,10 +174,15 @@ export default function Sidebar(props: SidebarProps) {
   };
 
   onMount(() => {
-    fetchCounts();
-    const interval = setInterval(fetchCounts, 5000);
-    // Refresh immediately when switching hosts
-    const onHostSwitch = () => fetchCounts();
+    fetchRemoteHosts();
+    const interval = setInterval(fetchRemoteHosts, 5000);
+    // A host switch invalidates all three, so refresh the shared polls too
+    // (the store would otherwise wait for its next tick).
+    const onHostSwitch = () => {
+      fetchRemoteHosts();
+      void containersPoll.refresh();
+      void imagesPoll.refresh();
+    };
     document.addEventListener("orca-host-switch", onHostSwitch);
     document.addEventListener("orca-refresh", onHostSwitch);
     onCleanup(() => {

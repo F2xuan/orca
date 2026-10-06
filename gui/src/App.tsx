@@ -1,9 +1,11 @@
 import { createSignal, createEffect, onMount, onCleanup, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonGet } from "./lib/daemonClient";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { onOrcaEvent } from "./lib/events";
 import { t } from "./lib/i18n";
 import { addEvent } from "./lib/activityStore";
+import { noteOpenCount } from "./lib/daemonAlerts";
 import { lazy } from "solid-js";
 const AiWindow = lazy(() => import("./components/AiWindow"));
 import Titlebar from "./components/Titlebar";
@@ -161,7 +163,7 @@ export default function App() {
     }, 15000);
 
     try {
-      const envStatus = (await invoke("env_status")) as EnvironmentStatus;
+      const envStatus = await daemonGet<EnvironmentStatus>("/environment/status");
       clearTimeout(timeout);
       setEnvironmentChecked(true);
       if (!envStatus.ready) {
@@ -170,7 +172,7 @@ export default function App() {
         // Environment says ready, but check if daemon can actually reach Docker
         setStartupStep(t("Verifying Docker connection..."));
         try {
-          const health = (await invoke("system_health")) as any;
+          const health = await daemonGet<{ docker_connected?: boolean }>("/system/health");
           if (!health?.docker_connected) {
             setPage("environment");
           }
@@ -391,6 +393,11 @@ export default function App() {
       } else if (eventType === "image.pulled" || eventType === "pull" || eventType === "ImagePulled") {
         addEvent({ type: "image.pulled", title: t("Image pulled: {reference}", { reference }), severity: "success" });
         showToast(t("Image pulled: {reference}", { reference }), "success");
+      } else if (eventType === "AlertChanged") {
+        // The badge is push-driven: the alert list itself is only fetched when
+        // the bell opens, so without this a disk alert would sit invisible
+        // until the user happened to look.
+        noteOpenCount(kind?.data?.open_count);
       }
     });
 

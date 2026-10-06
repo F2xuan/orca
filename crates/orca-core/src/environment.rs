@@ -32,6 +32,8 @@ pub enum CheckStatus {
 }
 
 /// System-level health metrics.
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemHealth {
     pub docker_connected: bool,
@@ -40,15 +42,20 @@ pub struct SystemHealth {
     pub system_resources: Option<SystemResources>,
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub gpu: Option<GpuInfo>,
     /// Operating system name (e.g., "linux", "windows").
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub os: Option<String>,
     /// CPU architecture (e.g., "x86_64", "aarch64").
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
     pub arch: Option<String>,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuInfo {
     pub name: String,
@@ -57,6 +64,8 @@ pub struct GpuInfo {
     pub utilization_percent: u32,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiskUsage {
     pub images_size_bytes: u64,
@@ -67,6 +76,8 @@ pub struct DiskUsage {
     pub reclaimable_bytes: u64,
 }
 
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemResources {
     pub cpu_count: u32,

@@ -35,11 +35,43 @@ export interface ContainerStats {
 export interface Image {
   id: string;
   repo_tags: string[];
+  /**
+   * Digests this image is known by in a registry, as `repo@sha256:…`.
+   *
+   * Empty for a locally built image, which is why update checks are tri-state
+   * rather than a boolean — there is nothing to compare against.
+   */
+  repo_digests: string[];
   size_bytes: number;
   created_at: string;
   /** Containers using this image. `undefined` = unknown, `[]` = unused. */
   used_by?: ImageUse[];
 }
+
+/**
+ * Whether a local tag still matches what its registry serves.
+ *
+ * `unknown` is a first-class outcome, not an error case: "the registry could not
+ * be reached" must never be rendered as "up to date".
+ */
+/**
+ * One image tag's update verdict, from `GET /images/updates`.
+ *
+ * An intersection rather than `interface … extends`: `UpdateCheck` is a
+ * discriminated union, and an interface can only extend a type with statically
+ * known members.
+ *
+ * `ImageUpdate` itself is still hand-written: it lives in `orca-daemon` as a
+ * private struct, not in `orca-core` with the other wire types, so it carries no
+ * ts-rs derive yet. It is the one `#[serde(flatten)]` on the wire, which is a
+ * third kind of type-vs-serde difference — see §32.
+ */
+export type ImageUpdate = UpdateCheck & {
+  /** The local tag this describes, e.g. `alpine:3.20`. */
+  image: string;
+  /** Local image id. */
+  id: string;
+};
 
 /** A container referencing an image. */
 export interface ImageUse {
@@ -384,44 +416,6 @@ export interface ImageSearchResult {
   pulls: string | null;
 }
 
-// --- System Health ---
-
-export interface GpuInfo {
-  name: string;
-  memory_used_mb: number;
-  memory_total_mb: number;
-  utilization_percent: number;
-}
-
-export interface SystemHealth {
-  docker_connected: boolean;
-  docker_version: string | null;
-  disk_usage: DiskUsage | null;
-  system_resources: SystemResources | null;
-  warnings: string[];
-  gpu?: GpuInfo;
-  os?: string;
-  arch?: string;
-}
-
-export interface DiskUsage {
-  images_size_bytes: number;
-  containers_size_bytes: number;
-  volumes_size_bytes: number;
-  build_cache_size_bytes: number;
-  total_size_bytes: number;
-  reclaimable_bytes: number;
-}
-
-export interface SystemResources {
-  cpu_count: number;
-  memory_total_bytes: number;
-  memory_available_bytes: number;
-  disk_total_bytes: number;
-  disk_free_bytes: number;
-  disk_usage_percent: number;
-}
-
 // --- Templates ---
 
 export interface AppTemplate {
@@ -685,3 +679,55 @@ export interface BuildComparison {
   args_diff: Array<{ key: string; value1: string | null; value2: string | null }>;
   dockerfile_changed: boolean;
 }
+
+// ── Daemon alerts and operations ───────────────────────────────────────────
+// Mirror `crates/orca-core/src/{alert,operation}.rs` and `ErrorCode` in
+// `crates/orca-daemon/src/api.rs`, field for field, snake_case included.
+//
+// Hand-written on purpose *for now*: generating these from the Rust types needs
+// a codegen crate in the cargo registry cache, which this environment cannot
+// write (komodo-borrowings-triage.md §18). Until then, `tsc` is what catches a
+// drift — a renamed or retyped Rust field shows up as a type error here rather
+// than as an `undefined` at runtime.
+
+/** Machine-readable codes from the daemon's error envelope. */
+export type ErrorCode =
+  | "invalid_input"
+  | "not_found"
+  | "timeout"
+  | "command_failed"
+  | "internal";
+
+// --- Wire types generated from Rust -----------------------------------------
+//
+// If a type's shape is a contract with the daemon, it is declared once, on the
+// Rust side, and the TypeScript under `./generated` is produced from it by
+// `scripts/codegen-types.sh` — which the gate re-runs and diffs, so the two
+// cannot drift apart silently.
+//
+// The generator models the Rust *type*, not the serde *wire format*. Two kinds
+// of difference needed explicit `#[cfg_attr(..., ts(...))]` attributes on the
+// Rust side, and both are worth knowing about before adding a type here (§30,
+// §31 of komodo-borrowings-triage.md):
+//   * `skip_serializing_if = "Option::is_none"` means the key is *absent*, not
+//     null — ts-rs maps `Option<T>` to `T | null` unless told `ts(optional)`;
+//   * `#[serde(other)]` constrains deserialisation only. Its variant is still
+//     serialised, and *is* reachable: a daemon that reads a log written by a
+//     newer build turns the unrecognised value into that variant and sends it
+//     on as `"unknown"`. It must stay in the generated union, or the client
+//     loses the one signal that forward compatibility is in play.
+export type { Alert } from "./generated/Alert";
+export type { AlertData } from "./generated/AlertData";
+export type { AlertsResponse } from "./generated/AlertsResponse";
+export type { SeverityLevel } from "./generated/SeverityLevel";
+export type { OperationActor } from "./generated/OperationActor";
+export type { OperationKind } from "./generated/OperationKind";
+export type { OperationRecord } from "./generated/OperationRecord";
+export type { OperationStatus } from "./generated/OperationStatus";
+export type { OperationsResponse } from "./generated/OperationsResponse";
+import type { UpdateCheck } from "./generated/UpdateCheck";
+export type { UpdateCheck };
+export type { SystemHealth } from "./generated/SystemHealth";
+export type { DiskUsage } from "./generated/DiskUsage";
+export type { SystemResources } from "./generated/SystemResources";
+export type { GpuInfo } from "./generated/GpuInfo";

@@ -1,6 +1,8 @@
-import { createSignal, onMount, onCleanup, For, Show } from "solid-js";
+import { createSignal, createEffect, onMount, For, Show } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { runStackAction, type StackAction } from "../lib/daemonStacks";
+import { useStacks } from "../lib/pollStore";
 import type { ComposeProject } from "../lib/types";
 import { formatPorts } from "../lib/format";
 import { showToast } from "../components/Toast";
@@ -43,19 +45,25 @@ export default function StacksPage(props: StacksPageProps) {
     setServiceLoading(null);
   };
 
-  const refresh = async () => {
-    try {
-      const result = (await invoke("list_stacks")) as ComposeProject[];
-      setStacks(result);
+  // Shared with the containers page and the dashboard, which poll the same
+  // resource: one timer and one request instead of one per page.
+  const stacksPoll = useStacks(3_000);
+  createEffect(() => {
+    const result = stacksPoll.data();
+    if (result) {
+      setStacks(result as ComposeProject[]);
       setLastUpdated(new Date());
-    } catch {
     }
+  });
+
+  const refresh = async () => {
+    await stacksPoll.refresh();
   };
 
   onMount(() => {
+    // The repeating refresh now comes from the shared poll; subscribing to it
+    // performs the first fetch.
     refresh();
-    const interval = setInterval(refresh, 3000);
-    onCleanup(() => clearInterval(interval));
   });
 
   const toggleExpand = (name: string) => {
@@ -77,7 +85,7 @@ export default function StacksPage(props: StacksPageProps) {
     setLoading(name);
     setComposeOutput(null);
     try {
-      const result = await invoke(action, { name });
+      const result = await runStackAction(action as StackAction, name);
       // Compose CLI actions return output, container actions don't
       if (result && typeof result === "object") {
         setComposeOutput({ name, output: result as any });

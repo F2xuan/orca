@@ -14,6 +14,131 @@ pub struct ToolDefinition {
     pub category: String,
 }
 
+/// Fallback tier for a tool that is missing from [`TOOL_RISKS`].
+///
+/// The *most* dangerous tier on purpose: an unclassified tool is one nobody has
+/// thought about, and the safe assumption about a tool nobody has thought about
+/// is that it can destroy things.
+fn default_tool_risk() -> ToolRisk {
+    ToolRisk::Destructive
+}
+
+/// How much damage a tool can do when an agent calls it with no human in the
+/// loop.
+///
+/// The tiers exist so the daemon can default to the safe end of the range.
+/// Agent tools are reachable by an LLM that may be following instructions
+/// embedded in the very data it was asked to inspect — a container's log lines,
+/// a page it fetched, a commit message. Read-only by default means a successful
+/// prompt injection is still embarrassing, but cannot delete the user's data.
+///
+/// The tiers are ordered and cumulative: permitting `Write` also permits
+/// `Read`. A policy that allowed writes while denying reads would be incoherent,
+/// so it is not representable here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRisk {
+    /// Observational only. Safe to run unattended.
+    Read,
+    /// Changes a running system, but in a way the user can undo: start, stop,
+    /// restart, pull, create, redeploy, scale.
+    Write,
+    /// Can destroy data, or is equivalent to handing over a shell. Not
+    /// recoverable by the agent that caused it.
+    Destructive,
+}
+
+impl ToolRisk {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Destructive => "destructive",
+        }
+    }
+
+    /// Whether a policy whose ceiling is `allowed` permits this tier.
+    pub fn is_permitted_by(self, allowed: ToolRisk) -> bool {
+        self <= allowed
+    }
+}
+
+/// The single source of truth for tool risk.
+///
+/// Kept as a table rather than a field on each `ToolDefinition` literal so the
+/// 42 tool sites stay untouched, and so the completeness tests in this module
+/// can assert the table covers the catalog *exactly* — in both directions. A
+/// newly added tool therefore cannot ship unclassified, and a renamed one
+/// cannot leave a stale row behind.
+const TOOL_RISKS: &[(&str, ToolRisk)] = &[
+    // --- Containers ---
+    ("list_containers", ToolRisk::Read),
+    ("inspect_container", ToolRisk::Read),
+    ("container_logs", ToolRisk::Read),
+    ("container_stats", ToolRisk::Read),
+    ("diagnose_container", ToolRisk::Read),
+    ("system_health", ToolRisk::Read),
+    ("environment_status", ToolRisk::Read),
+    ("check_port_availability", ToolRisk::Read),
+    ("start_container", ToolRisk::Write),
+    ("stop_container", ToolRisk::Write),
+    ("restart_container", ToolRisk::Write),
+    ("create_and_run_container", ToolRisk::Write),
+    // Runs an arbitrary command inside the container. Tiered with the
+    // destructive operations, not the recoverable ones: the command can delete
+    // anything the container can write, and the agent cannot undo it.
+    ("exec_in_container", ToolRisk::Destructive),
+    ("remove_container", ToolRisk::Destructive),
+    // --- Images ---
+    ("list_images", ToolRisk::Read),
+    ("pull_image", ToolRisk::Write),
+    ("remove_image", ToolRisk::Destructive),
+    // Pruning deletes images that are not merely unused but *untagged*, which
+    // includes build cache the user may be relying on for the next build.
+    ("prune_images", ToolRisk::Destructive),
+    // --- Stacks ---
+    ("list_stacks", ToolRisk::Read),
+    ("compose_up", ToolRisk::Write),
+    // `compose down` removes the containers. Named volumes survive, but
+    // container-local state does not, and an agent that tears down a stack
+    // unattended is a bad default regardless.
+    ("compose_down", ToolRisk::Destructive),
+    // --- Volumes / networks ---
+    ("list_volumes", ToolRisk::Read),
+    ("list_networks", ToolRisk::Read),
+    ("create_network", ToolRisk::Write),
+    // --- Templates ---
+    ("list_templates", ToolRisk::Read),
+    ("deploy_template", ToolRisk::Write),
+    // --- Kubernetes ---
+    ("k8s_status", ToolRisk::Read),
+    ("k8s_list_pods", ToolRisk::Read),
+    ("k8s_list_deployments", ToolRisk::Read),
+    ("k8s_list_services", ToolRisk::Read),
+    ("k8s_list_namespaces", ToolRisk::Read),
+    ("k8s_list_events", ToolRisk::Read),
+    ("k8s_list_configmaps", ToolRisk::Read),
+    // Names only, never values — see the tool description.
+    ("k8s_list_secrets", ToolRisk::Read),
+    ("k8s_list_ingresses", ToolRisk::Read),
+    ("k8s_helm_list", ToolRisk::Read),
+    ("k8s_pod_logs", ToolRisk::Read),
+    ("k8s_get_yaml", ToolRisk::Read),
+    ("k8s_apply_yaml", ToolRisk::Write),
+    ("k8s_restart_deployment", ToolRisk::Write),
+    ("k8s_scale_deployment", ToolRisk::Write),
+    ("k8s_delete_pod", ToolRisk::Destructive),
+];
+
+/// The risk tier of a catalog tool, or `None` when the name is not in the
+/// catalog at all. Callers should treat `None` as a refusal, not as "safe".
+pub fn tool_risk(name: &str) -> Option<ToolRisk> {
+    TOOL_RISKS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, risk)| *risk)
+}
+
 fn json_schema(properties: serde_json::Value) -> serde_json::Value {
     json!({
         "type": "object",
@@ -332,6 +457,25 @@ pub fn tool_catalog() -> Vec<ToolDefinition> {
     ]
 }
 
+/// The catalog paired with each tool's risk tier.
+///
+/// Kept separate from [`tool_catalog`] so the 42 definition literals do not
+/// each repeat a tier this module already owns, and so callers that only need
+/// names and descriptions (the MCP and OpenAI tool listings) are unaffected.
+///
+/// A tool missing from [`TOOL_RISKS`] gets the most dangerous tier rather than
+/// the most permissive one; `every_catalog_tool_has_a_declared_risk` fails the
+/// build before that can happen.
+pub fn tool_catalog_with_risk() -> Vec<(ToolDefinition, ToolRisk)> {
+    tool_catalog()
+        .into_iter()
+        .map(|tool| {
+            let risk = tool_risk(&tool.name).unwrap_or_else(default_tool_risk);
+            (tool, risk)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +521,91 @@ mod tests {
             catalog.iter().any(|t| t.name == "diagnose_container"),
             "catalog must contain the 'diagnose_container' diagnostic tool"
         );
+    }
+
+    /// The point of the risk table is that nothing can be added to the catalog
+    /// without someone deciding how dangerous it is. Without this test, a new
+    /// tool would silently inherit the `Destructive` fallback — safe, but
+    /// permanently unusable and with no hint as to why.
+    #[test]
+    fn every_catalog_tool_has_a_declared_risk() {
+        for tool in tool_catalog() {
+            assert!(
+                tool_risk(&tool.name).is_some(),
+                "tool '{}' is in the catalog but has no entry in TOOL_RISKS",
+                tool.name
+            );
+        }
+    }
+
+    /// The other direction: a row left behind after a rename would keep
+    /// `tool_risk` answering for a tool that no longer exists, and would let
+    /// `every_catalog_tool_has_a_declared_risk` pass while the real tool went
+    /// unclassified.
+    #[test]
+    fn risk_table_has_no_stale_entries() {
+        let catalog: HashSet<String> = tool_catalog().into_iter().map(|t| t.name).collect();
+        for (name, _) in TOOL_RISKS {
+            assert!(
+                catalog.contains(*name),
+                "TOOL_RISKS classifies '{name}', which is not in the tool catalog"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_tools_have_no_risk_rather_than_a_safe_one() {
+        assert_eq!(
+            tool_risk("definitely_not_a_tool"),
+            None,
+            "an unknown name must be distinguishable from a known-safe one, \
+             so callers refuse it instead of running it"
+        );
+    }
+
+    #[test]
+    fn tiers_are_cumulative() {
+        assert!(ToolRisk::Read.is_permitted_by(ToolRisk::Read));
+        assert!(!ToolRisk::Write.is_permitted_by(ToolRisk::Read));
+        assert!(!ToolRisk::Destructive.is_permitted_by(ToolRisk::Read));
+
+        assert!(ToolRisk::Read.is_permitted_by(ToolRisk::Write));
+        assert!(ToolRisk::Write.is_permitted_by(ToolRisk::Write));
+        assert!(!ToolRisk::Destructive.is_permitted_by(ToolRisk::Write));
+
+        assert!(ToolRisk::Destructive.is_permitted_by(ToolRisk::Destructive));
+    }
+
+    /// The destructive tier is the one that has to be *right*: a read-only
+    /// default is only meaningful if the tools it blocks are the ones that can
+    /// lose data. Pin the obvious members so a reclassification has to be
+    /// deliberate.
+    #[test]
+    fn data_destroying_tools_are_tiered_destructive() {
+        for name in [
+            "remove_container",
+            "remove_image",
+            "prune_images",
+            "compose_down",
+            "exec_in_container",
+            "k8s_delete_pod",
+        ] {
+            assert_eq!(
+                tool_risk(name),
+                Some(ToolRisk::Destructive),
+                "'{name}' can destroy data or run arbitrary code and must not be \
+                 reachable under a read-only agent policy"
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_with_risk_covers_the_catalog_in_order() {
+        let catalog = tool_catalog();
+        let paired = tool_catalog_with_risk();
+        assert_eq!(paired.len(), catalog.len());
+        for (plain, (with_risk, _)) in catalog.iter().zip(paired.iter()) {
+            assert_eq!(plain.name, with_risk.name, "order must be preserved");
+        }
     }
 }

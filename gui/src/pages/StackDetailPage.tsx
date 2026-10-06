@@ -1,6 +1,8 @@
 import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { runStackAction, type StackAction } from "../lib/daemonStacks";
+import { daemonGet } from "../lib/daemonClient";
 import type { ComposeProject } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
 import { formatPorts } from "../lib/format";
@@ -32,7 +34,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
 
   const fetchStack = async () => {
     try {
-      const result = (await invoke("get_stack", { name: props.stackName })) as ComposeProject;
+      const result = await daemonGet<ComposeProject>(`/stacks/${encodeURIComponent(props.stackName)}`);
       setStack(result);
     } catch {
     }
@@ -60,7 +62,7 @@ export default function StackDetailPage(props: StackDetailPageProps) {
   const doStackAction = async (action: string) => {
     setActionInProgress(true);
     try {
-      const result = await invoke(action, { name: props.stackName });
+      const result = await runStackAction(action as StackAction, props.stackName);
       if (result && typeof result === "object") {
         const output = result as any;
         if (!output.success) {

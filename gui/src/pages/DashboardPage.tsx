@@ -2,12 +2,24 @@ import { createSignal, onMount, onCleanup, For, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import type { Container, ContainerStats, Image, ComposeProject, SystemHealth, GatewayStatus, GatewayRoute } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
+import { daemonGet } from "../lib/daemonClient";
 import { t } from "../lib/i18n";
 import { formatBytes } from "../lib/format";
 import { recordMetrics, getDashboardCpuHistory, getDashboardMemHistory, getPerContainerCpuChartHistory, getPerContainerMemChartHistory } from "../lib/metricsStore";
 
 import TimeChart from "../components/TimeChart";
 import LastUpdated from "../components/LastUpdated";
+
+/**
+ * The same timeout semantics as `invokeWithTimeout`, over the direct daemon
+ * client. Used for the resources the dashboard reads from the daemon directly;
+ * the remaining calls still go through the Tauri layer.
+ */
+function daemonGetWithTimeout<T>(path: string, timeoutMs = 10_000): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return daemonGet<T>(path, controller.signal).finally(() => clearTimeout(timer));
+}
 
 /** Wrap an invoke call with a timeout (ms). Rejects on timeout. */
 function invokeWithTimeout<T>(cmd: string, args?: Record<string, unknown>, timeoutMs = 10_000): Promise<T> {
@@ -66,28 +78,28 @@ export default function DashboardPage(props: DashboardPageProps) {
   const fetchAll = () => {
     // Each card fetches independently — no waiting for the others
     // Don't log connection errors to Activity (they're transient during startup)
-    invokeWithTimeout<Container[]>("list_containers")
+    daemonGetWithTimeout<Container[]>("/containers")
       .then((v) => { setContainers(v || []); setContainersState("ready"); connectionFailCount = 0; })
       .catch((e) => { setContainersError(friendlyError(String(e))); setContainersState("error"); })
       .finally(() => setLastUpdated(new Date()));
 
-    invokeWithTimeout<Image[]>("list_images")
+    daemonGetWithTimeout<Image[]>("/images")
       .then((v) => { setImages(v || []); setImagesState("ready"); })
       .catch((e) => { setImagesError(friendlyError(String(e))); setImagesState("error"); });
 
-    invokeWithTimeout<ComposeProject[]>("list_stacks")
+    daemonGetWithTimeout<ComposeProject[]>("/stacks")
       .then((v) => { setStacks(v || []); setStacksState("ready"); })
       .catch((e) => { setStacksError(friendlyError(String(e))); setStacksState("error"); });
 
-    invokeWithTimeout<SystemHealth>("system_health", undefined, 15_000)
+    daemonGetWithTimeout<SystemHealth>("/system/health", 15_000)
       .then((v) => { setHealth(v); setHealthState("ready"); })
       .catch((e) => { setHealthError(friendlyError(String(e))); setHealthState("error"); });
 
-    invokeWithTimeout<GatewayStatus>("gateway_status")
+    daemonGetWithTimeout<GatewayStatus>("/gateway/status")
       .then((v) => {
         setGatewayStatus(v);
         if (v?.running) {
-          invokeWithTimeout<GatewayRoute[]>("gateway_list_routes")
+          daemonGetWithTimeout<GatewayRoute[]>("/gateway/routes")
             .then((r) => setGatewayRoutes(r || []))
             .catch(() => setGatewayRoutes([]));
         } else {

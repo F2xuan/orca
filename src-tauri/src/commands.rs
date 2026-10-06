@@ -98,12 +98,6 @@ fn log_stream_map() -> &'static Mutex<HashMap<String, LogStreamHandle>> {
 
 const LOCAL_DAEMON_BASE: &str = "http://127.0.0.1:9477";
 
-/// Rewrite `docker-desktop://` URLs to `orca://` URLs in output text.
-fn rewrite_docker_desktop_urls(text: &str) -> String {
-    text.replace("docker-desktop://dashboard/build/", "orca://build/")
-        .replace("docker-desktop://", "orca://")
-}
-
 /// Override for the daemon URL when a remote host is selected.
 /// Contains (base_url, token, tls_verify) when a remote host is active, None for local.
 /// base_url is scheme://host:port — /api/v1 is always appended by daemon_url().
@@ -221,22 +215,6 @@ async fn post_empty(path: &str) -> Result<(), String> {
     }
 }
 
-async fn post_json(path: &str) -> Result<serde_json::Value, String> {
-    let base = daemon_url();
-    let resp = client()
-        .post(format!("{base}{path}"))
-        .send()
-        .await
-        .map_err(|e| format!("Daemon connection failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(body);
-    }
-
-    resp.json().await.map_err(|e| format!("Invalid response: {e}"))
-}
-
 async fn patch_json(path: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
     let base = daemon_url();
     let resp = client()
@@ -249,32 +227,6 @@ async fn patch_json(path: &str, body: &serde_json::Value) -> Result<serde_json::
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
         return Err(body);
-    }
-
-    resp.json().await.map_err(|e| format!("Invalid response: {e}"))
-}
-
-/// The daemon reports failures as `{"error": "..."}`. Unwrap that so the UI can
-/// show the actual message instead of a JSON blob.
-fn daemon_error(body: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
-        .unwrap_or_else(|| body.to_string())
-}
-
-async fn put_json(path: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
-    let base = daemon_url();
-    let resp = client()
-        .put(format!("{base}{path}"))
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| format!("Daemon connection failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(daemon_error(&body));
     }
 
     resp.json().await.map_err(|e| format!("Invalid response: {e}"))
@@ -329,16 +281,6 @@ pub async fn get_status() -> Result<serde_json::Value, String> {
 }
 
 // --- Containers ---
-
-#[tauri::command]
-pub async fn list_containers() -> Result<serde_json::Value, String> {
-    get_json("/containers").await
-}
-
-#[tauri::command]
-pub async fn inspect_container(id: String) -> Result<serde_json::Value, String> {
-    get_json(&format!("/containers/{}", urlencoding::encode(&id))).await
-}
 
 #[tauri::command]
 pub async fn container_stats(id: String) -> Result<serde_json::Value, String> {
@@ -730,11 +672,6 @@ pub async fn create_and_run_container(
 // --- Registries ---
 
 #[tauri::command]
-pub async fn list_registries() -> Result<serde_json::Value, String> {
-    get_json("/registries").await
-}
-
-#[tauri::command]
 pub async fn add_registry(server: String, name: String, username: String, password: String) -> Result<(), String> {
     let base = daemon_url();
     let resp = client()
@@ -758,22 +695,11 @@ pub async fn add_registry(server: String, name: String, username: String, passwo
 }
 
 #[tauri::command]
-pub async fn remove_registry(server: String) -> Result<(), String> {
-    let encoded = urlencoding::encode(&server);
-    delete(&format!("/registries/{encoded}")).await
-}
-
-#[tauri::command]
 pub async fn search_images(query: String) -> Result<serde_json::Value, String> {
     get_json(&format!("/images/search?q={}&limit=20", urlencoding::encode(&query))).await
 }
 
 // --- Images ---
-
-#[tauri::command]
-pub async fn list_images() -> Result<serde_json::Value, String> {
-    get_json("/images").await
-}
 
 #[tauri::command]
 pub async fn pull_image(
@@ -887,30 +813,6 @@ pub async fn pull_image_stream(
 }
 
 #[tauri::command]
-pub async fn remove_image(id: String) -> Result<(), String> {
-    delete(&format!("/images/{}", urlencoding::encode(&id))).await
-}
-
-#[tauri::command]
-pub async fn batch_delete_images(ids: Vec<String>, force: bool) -> Result<serde_json::Value, String> {
-    let base = daemon_url();
-    client()
-        .post(format!("{base}/images/batch-delete"))
-        .json(&serde_json::json!({ "ids": ids, "force": force }))
-        .send()
-        .await
-        .map_err(|e| format!("Batch delete failed: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Invalid response: {e}"))
-}
-
-#[tauri::command]
-pub async fn prune_images() -> Result<serde_json::Value, String> {
-    post_json("/images/prune").await
-}
-
-#[tauri::command]
 pub async fn tag_image(source: String, repo: String, tag: String) -> Result<(), String> {
     let base = daemon_url();
     let resp = client()
@@ -926,77 +828,11 @@ pub async fn tag_image(source: String, repo: String, tag: String) -> Result<(), 
     Ok(())
 }
 
-#[tauri::command]
-pub async fn build_image(
-    context_path: String,
-    dockerfile: Option<String>,
-    tag: Option<String>,
-    build_args: Option<HashMap<String, String>>,
-) -> Result<serde_json::Value, String> {
-    let base = daemon_url();
-    let resp = client()
-        .post(format!("{base}/images/build"))
-        .json(&serde_json::json!({
-            "context_path": context_path,
-            "dockerfile": dockerfile,
-            "tag": tag,
-            "build_args": build_args,
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Build failed: {e}"))?
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read build response: {e}"))?;
-
-    // Parse SSE build log
-    let logs: Vec<String> = resp
-        .lines()
-        .filter_map(|line| line.strip_prefix("data:"))
-        .filter_map(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .filter_map(|v| {
-            if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-                Some(format!("ERROR: {err}"))
-            } else {
-                v.get("stream")
-                    .and_then(|s| s.as_str())
-                    .map(|s| rewrite_docker_desktop_urls(s))
-            }
-        })
-        .collect();
-
-    let has_error = logs.iter().any(|l| l.starts_with("ERROR:"));
-    Ok(serde_json::json!({
-        "success": !has_error,
-        "logs": logs,
-    }))
-}
-
 // --- Builds ---
-
-#[tauri::command]
-pub async fn list_builds() -> Result<serde_json::Value, String> {
-    get_json("/builds").await
-}
-
-#[tauri::command]
-pub async fn get_build(id: String) -> Result<serde_json::Value, String> {
-    get_json(&format!("/builds/{}", urlencoding::encode(&id))).await
-}
 
 #[tauri::command]
 pub async fn get_build_logs(id: String) -> Result<String, String> {
     get_text(&format!("/builds/{}/logs", urlencoding::encode(&id))).await
-}
-
-#[tauri::command]
-pub async fn delete_build(id: String) -> Result<(), String> {
-    delete(&format!("/builds/{}", urlencoding::encode(&id))).await
-}
-
-#[tauri::command]
-pub async fn get_build_stats() -> Result<serde_json::Value, String> {
-    get_json("/builds/stats").await
 }
 
 #[tauri::command]
@@ -1041,80 +877,9 @@ pub async fn compare_builds(id1: String, id2: String) -> Result<serde_json::Valu
 
 // --- Build Targets ---
 
-#[tauri::command]
-pub async fn list_build_targets() -> Result<serde_json::Value, String> {
-    get_json("/builds/targets").await
-}
-
-#[tauri::command]
-pub async fn start_build_target(name: String) -> Result<serde_json::Value, String> {
-    post_json(&format!("/builds/targets/{}", urlencoding::encode(&name))).await
-}
-
 // --- Volumes ---
 
-#[tauri::command]
-pub async fn list_volumes() -> Result<serde_json::Value, String> {
-    get_json("/volumes").await
-}
-
-#[tauri::command]
-pub async fn remove_volume(name: String) -> Result<(), String> {
-    delete(&format!("/volumes/{}", urlencoding::encode(&name))).await
-}
-
-#[tauri::command]
-pub async fn create_volume(
-    name: String,
-    driver: Option<String>,
-    labels: Option<Vec<String>>,
-) -> Result<serde_json::Value, String> {
-    let base = daemon_url();
-    client()
-        .post(format!("{base}/volumes"))
-        .json(&serde_json::json!({
-            "name": name,
-            "driver": driver.unwrap_or_else(|| "local".to_string()),
-            "labels": labels.unwrap_or_default(),
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to create volume: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Invalid response: {e}"))
-}
-
 // --- Volume File Browsing ---
-
-#[tauri::command]
-pub async fn volume_list_files(name: String, path: Option<String>) -> Result<serde_json::Value, String> {
-    let query = match &path {
-        Some(p) => format!("?path={}", urlencoding::encode(p)),
-        None => String::new(),
-    };
-    get_json(&format!("/volumes/{}/files{query}", urlencoding::encode(&name))).await
-}
-
-#[tauri::command]
-pub async fn volume_read_file(name: String, path: String) -> Result<serde_json::Value, String> {
-    get_json(&format!(
-        "/volumes/{}/file?path={}",
-        urlencoding::encode(&name),
-        urlencoding::encode(&path)
-    ))
-    .await
-}
-
-#[tauri::command]
-pub async fn volume_containers(name: String) -> Result<serde_json::Value, String> {
-    get_json(&format!("/volumes/{}/containers", urlencoding::encode(&name))).await
-}
-
-#[tauri::command]
-pub async fn volume_sizes() -> Result<serde_json::Value, String> {
-    get_json("/volumes/sizes").await
-}
 
 // --- Container File Browsing ---
 
@@ -1125,13 +890,6 @@ pub async fn container_list_files(id: String, path: Option<String>) -> Result<se
         .map(|p| format!("?path={}", urlencoding::encode(&p)))
         .unwrap_or_default();
     get_json(&format!("/containers/{encoded_id}/files{path_param}")).await
-}
-
-#[tauri::command]
-pub async fn container_read_file(id: String, path: String) -> Result<serde_json::Value, String> {
-    let encoded_id = urlencoding::encode(&id);
-    let encoded_path = urlencoding::encode(&path);
-    get_json(&format!("/containers/{encoded_id}/file?path={encoded_path}")).await
 }
 
 // --- Container Commit ---
@@ -1158,24 +916,12 @@ pub async fn inspect_image(id: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn image_history(id: String) -> Result<serde_json::Value, String> {
-    get_json(&format!("/images/{}/history", urlencoding::encode(&id))).await
-}
-
-#[tauri::command]
 pub async fn image_list_files(id: String, path: Option<String>) -> Result<serde_json::Value, String> {
     let encoded_id = urlencoding::encode(&id);
     let path_param = path
         .map(|p| format!("?path={}", urlencoding::encode(&p)))
         .unwrap_or_default();
     get_json(&format!("/images/{encoded_id}/files{path_param}")).await
-}
-
-#[tauri::command]
-pub async fn image_read_file(id: String, path: String) -> Result<serde_json::Value, String> {
-    let encoded_id = urlencoding::encode(&id);
-    let encoded_path = urlencoding::encode(&path);
-    get_json(&format!("/images/{encoded_id}/file?path={encoded_path}")).await
 }
 
 // --- Image Import ---
@@ -1264,69 +1010,7 @@ pub async fn scan_image(id: String) -> Result<serde_json::Value, String> {
 
 // --- Networks ---
 
-#[tauri::command]
-pub async fn list_networks() -> Result<serde_json::Value, String> {
-    get_json("/networks").await
-}
-
-#[tauri::command]
-pub async fn create_network(name: String, driver: Option<String>) -> Result<serde_json::Value, String> {
-    let base = daemon_url();
-    client()
-        .post(format!("{base}/networks"))
-        .json(&serde_json::json!({
-            "name": name,
-            "driver": driver.unwrap_or_else(|| "bridge".to_string()),
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to create network: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Invalid response: {e}"))
-}
-
-#[tauri::command]
-pub async fn remove_network(name: String) -> Result<(), String> {
-    delete(&format!("/networks/{}", urlencoding::encode(&name))).await
-}
-
-#[tauri::command]
-pub async fn network_topology() -> Result<serde_json::Value, String> {
-    get_json("/networks/topology").await
-}
-
 // --- Stacks (Compose Projects) ---
-
-#[tauri::command]
-pub async fn list_stacks() -> Result<serde_json::Value, String> {
-    get_json("/stacks").await
-}
-
-#[tauri::command]
-pub async fn get_stack(name: String) -> Result<serde_json::Value, String> {
-    get_json(&format!("/stacks/{}", urlencoding::encode(&name))).await
-}
-
-#[tauri::command]
-pub async fn start_stack(name: String) -> Result<(), String> {
-    post_empty(&format!("/stacks/{}/start", urlencoding::encode(&name))).await
-}
-
-#[tauri::command]
-pub async fn stop_stack(name: String) -> Result<(), String> {
-    post_empty(&format!("/stacks/{}/stop", urlencoding::encode(&name))).await
-}
-
-#[tauri::command]
-pub async fn restart_stack(name: String) -> Result<(), String> {
-    post_empty(&format!("/stacks/{}/restart", urlencoding::encode(&name))).await
-}
-
-#[tauri::command]
-pub async fn compose_up(name: String) -> Result<serde_json::Value, String> {
-    post_json(&format!("/stacks/{}/up", urlencoding::encode(&name))).await
-}
 
 #[tauri::command]
 pub async fn compose_deploy_path(path: String) -> Result<serde_json::Value, String> {
@@ -1356,16 +1040,6 @@ pub async fn validate_compose(path: String) -> Result<serde_json::Value, String>
         return Err(resp.text().await.unwrap_or_default());
     }
     resp.json().await.map_err(|e| format!("{e}"))
-}
-
-#[tauri::command]
-pub async fn compose_down(name: String) -> Result<serde_json::Value, String> {
-    post_json(&format!("/stacks/{}/down", urlencoding::encode(&name))).await
-}
-
-#[tauri::command]
-pub async fn compose_pull(name: String) -> Result<serde_json::Value, String> {
-    post_json(&format!("/stacks/{}/pull", urlencoding::encode(&name))).await
 }
 
 #[tauri::command]
@@ -1471,11 +1145,6 @@ pub async fn get_machine_info() -> Result<serde_json::Value, String> {
 // --- Kubernetes ---
 
 #[tauri::command]
-pub async fn k8s_status() -> Result<serde_json::Value, String> {
-    get_json("/k8s/status").await
-}
-
-#[tauri::command]
 pub async fn k8s_enable() -> Result<serde_json::Value, String> {
     let base = daemon_url();
     // K8s setup can take several minutes — use a long timeout
@@ -1489,26 +1158,6 @@ pub async fn k8s_enable() -> Result<serde_json::Value, String> {
         .json()
         .await
         .map_err(|e| format!("Invalid response: {e}"))
-}
-
-#[tauri::command]
-pub async fn k8s_disable() -> Result<(), String> {
-    post_empty("/k8s/disable").await
-}
-
-#[tauri::command]
-pub async fn k8s_start() -> Result<(), String> {
-    post_empty("/k8s/start").await
-}
-
-#[tauri::command]
-pub async fn k8s_reset() -> Result<(), String> {
-    post_empty("/k8s/reset").await
-}
-
-#[tauri::command]
-pub async fn k8s_get_runtime() -> Result<serde_json::Value, String> {
-    get_json("/k8s/runtime").await
 }
 
 #[tauri::command]
@@ -1526,11 +1175,6 @@ pub async fn k8s_set_runtime(runtime: String) -> Result<(), String> {
     } else {
         Err(resp.text().await.unwrap_or_default())
     }
-}
-
-#[tauri::command]
-pub async fn k8s_namespaces() -> Result<serde_json::Value, String> {
-    get_json("/k8s/namespaces").await
 }
 
 #[tauri::command]
@@ -1561,11 +1205,6 @@ pub async fn k8s_ingresses(namespace: String) -> Result<serde_json::Value, Strin
 pub async fn k8s_pvcs(namespace: String) -> Result<serde_json::Value, String> {
     validate_k8s_name(&namespace)?;
     get_json(&format!("/k8s/pvcs/{}", urlencoding::encode(&namespace))).await
-}
-
-#[tauri::command]
-pub async fn k8s_pvs() -> Result<serde_json::Value, String> {
-    get_json("/k8s/pvs").await
 }
 
 #[tauri::command]
@@ -2132,16 +1771,6 @@ pub async fn k8s_delete_network_policy(namespace: String, name: String) -> Resul
     .await
 }
 
-#[tauri::command]
-pub async fn k8s_storage_classes() -> Result<serde_json::Value, String> {
-    get_json("/k8s/storage-classes").await
-}
-
-#[tauri::command]
-pub async fn k8s_crds() -> Result<serde_json::Value, String> {
-    get_json("/k8s/crds").await
-}
-
 // --- K8s Jobs / CronJobs ---
 
 #[tauri::command]
@@ -2217,11 +1846,6 @@ pub async fn k8s_suspend_cronjob(namespace: String, name: String, suspend: bool)
         .json()
         .await
         .map_err(|e| format!("Invalid response: {e}"))
-}
-
-#[tauri::command]
-pub async fn k8s_helm_list() -> Result<serde_json::Value, String> {
-    get_json("/k8s/helm/releases").await
 }
 
 #[tauri::command]
@@ -2471,22 +2095,7 @@ pub async fn k8s_list_port_forwards() -> Result<serde_json::Value, String> {
 
 // --- System Health ---
 
-#[tauri::command]
-pub async fn system_health() -> Result<serde_json::Value, String> {
-    get_json("/system/health").await
-}
-
-#[tauri::command]
-pub async fn host_uid() -> Result<serde_json::Value, String> {
-    get_json("/system/host-uid").await
-}
-
 // --- Environment ---
-
-#[tauri::command]
-pub async fn env_status() -> Result<serde_json::Value, String> {
-    get_json("/environment/status").await
-}
 
 #[tauri::command]
 pub async fn env_fix(action: String) -> Result<serde_json::Value, String> {
@@ -2571,65 +2180,7 @@ pub async fn env_fix_stream(app: tauri::AppHandle, action: String) -> Result<(),
 
 // --- Docker Desktop Migration ---
 
-#[tauri::command]
-pub async fn docker_desktop_status() -> Result<serde_json::Value, String> {
-    get_json("/environment/docker-desktop-status").await
-}
-
-#[tauri::command]
-pub async fn switch_to_orca_runtime() -> Result<serde_json::Value, String> {
-    post_json("/environment/switch-to-orca").await
-}
-
-#[tauri::command]
-pub async fn stop_docker_desktop() -> Result<serde_json::Value, String> {
-    post_json("/environment/stop-docker-desktop").await
-}
-
-#[tauri::command]
-pub async fn get_engine_config() -> Result<serde_json::Value, String> {
-    get_json("/environment/engine-config").await
-}
-
-/// Apply a structured patch. Only the keys present in `patch` are touched;
-/// everything else in `daemon.json` is preserved.
-#[tauri::command]
-pub async fn set_engine_config(patch: serde_json::Value) -> Result<serde_json::Value, String> {
-    put_json("/environment/engine-config", &patch).await
-}
-
-/// Replace the entire config object (advanced raw-JSON editor).
-#[tauri::command]
-pub async fn set_engine_config_raw(config: serde_json::Value) -> Result<serde_json::Value, String> {
-    put_json(
-        "/environment/engine-config/raw",
-        &serde_json::json!({ "config": config }),
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn restart_docker_engine() -> Result<serde_json::Value, String> {
-    post_json("/environment/restart-engine").await
-}
-
 // --- Templates ---
-
-#[tauri::command]
-pub async fn list_templates() -> Result<serde_json::Value, String> {
-    get_json("/templates").await
-}
-
-#[tauri::command]
-pub async fn refresh_templates() -> Result<serde_json::Value, String> {
-    let base = daemon_url();
-    let resp = client()
-        .post(format!("{base}/templates/refresh"))
-        .send()
-        .await
-        .map_err(|e| format!("{e}"))?;
-    resp.json().await.map_err(|e| format!("{e}"))
-}
 
 #[tauri::command]
 pub async fn deploy_template(
@@ -2835,34 +2386,6 @@ pub async fn deploy_template_to_hosts(
     }))
 }
 
-#[tauri::command]
-pub async fn save_user_template(template: serde_json::Value) -> Result<serde_json::Value, String> {
-    let base = daemon_url();
-    client()
-        .post(format!("{base}/templates/user"))
-        .json(&template)
-        .send()
-        .await
-        .map_err(|e| format!("Save failed: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Invalid response: {e}"))
-}
-
-#[tauri::command]
-pub async fn delete_user_template(id: String) -> Result<serde_json::Value, String> {
-    let base = daemon_url();
-    client()
-        .delete(format!("{base}/templates/user"))
-        .query(&[("id", &id)])
-        .send()
-        .await
-        .map_err(|e| format!("Delete failed: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Invalid response: {e}"))
-}
-
 // --- AI Assistant ---
 
 #[tauri::command]
@@ -3066,11 +2589,6 @@ pub async fn get_intercept_docker_urls() -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn get_general_settings() -> Result<serde_json::Value, String> {
-    get_json("/settings/general").await
-}
-
-#[tauri::command]
 pub async fn save_general_settings(
     start_on_login: bool,
     show_tray_icon: bool,
@@ -3101,11 +2619,6 @@ pub async fn save_general_settings(
 // --- Lima VM Settings ---
 
 #[tauri::command]
-pub async fn get_lima_settings() -> Result<serde_json::Value, String> {
-    get_json("/settings/lima").await
-}
-
-#[tauri::command]
 pub async fn save_lima_settings(
     name: String,
     cpus: u32,
@@ -3125,12 +2638,18 @@ pub async fn save_lima_settings(
         .map_err(|e| format!("Invalid response: {e}"))
 }
 
+/// Save AI provider credentials, and optionally the agent's tool-risk ceiling.
+///
+/// `max_risk` is `Some("read" | "write" | "destructive")` to change the ceiling,
+/// or `None` to leave it alone (the daemon treats an absent field that way), so
+/// a caller that predates this parameter cannot widen permissions by omission.
 #[tauri::command]
 pub async fn save_ai_settings(
     provider: String,
     api_key: String,
     model: String,
     url: Option<String>,
+    max_risk: Option<String>,
 ) -> Result<(), String> {
     let base = daemon_url();
     let resp = client()
@@ -3140,6 +2659,7 @@ pub async fn save_ai_settings(
             "api_key": api_key,
             "model": model,
             "url": url,
+            "max_risk": max_risk,
         }))
         .send()
         .await
@@ -3151,16 +2671,6 @@ pub async fn save_ai_settings(
         let body = resp.text().await.unwrap_or_default();
         Err(body)
     }
-}
-
-#[tauri::command]
-pub async fn get_ai_settings() -> Result<serde_json::Value, String> {
-    get_json("/settings/ai").await
-}
-
-#[tauri::command]
-pub async fn list_ai_models() -> Result<serde_json::Value, String> {
-    get_json("/settings/ai/models").await
 }
 
 #[tauri::command]
@@ -3277,11 +2787,6 @@ pub async fn get_ca_certificate() -> Result<String, String> {
     resp.text()
         .await
         .map_err(|e| format!("Failed to read CA certificate: {e}"))
-}
-
-#[tauri::command]
-pub async fn get_ca_info() -> Result<serde_json::Value, String> {
-    get_json("/ca/info").await
 }
 
 /// Bound on content that any frontend can write via `write_temp_file`.
@@ -4157,11 +3662,6 @@ pub async fn compare_hosts(host_ids: Vec<Option<String>>) -> Result<serde_json::
 // --- Auto-Deploy Rules ---
 
 #[tauri::command]
-pub async fn list_deploy_rules() -> Result<serde_json::Value, String> {
-    get_json("/deploy/rules").await
-}
-
-#[tauri::command]
 pub async fn save_deploy_rule(
     id: Option<String>,
     name: String,
@@ -4191,16 +3691,6 @@ pub async fn save_deploy_rule(
         return Err(resp.text().await.unwrap_or_default());
     }
     resp.json().await.map_err(|e| format!("{e}"))
-}
-
-#[tauri::command]
-pub async fn delete_deploy_rule(id: String) -> Result<(), String> {
-    delete(&format!("/deploy/rules/{}", urlencoding::encode(&id))).await
-}
-
-#[tauri::command]
-pub async fn list_deploy_history() -> Result<serde_json::Value, String> {
-    get_json("/deploy/history").await
 }
 
 #[tauri::command]
@@ -4267,11 +3757,6 @@ pub async fn get_daemon_ws_url(path: String) -> Result<String, String> {
 // --- Scheduled Actions ---
 
 #[tauri::command]
-pub async fn list_schedules() -> Result<serde_json::Value, String> {
-    get_json("/schedules").await
-}
-
-#[tauri::command]
 pub async fn save_schedule(
     id: Option<String>,
     name: String,
@@ -4301,11 +3786,6 @@ pub async fn save_schedule(
         return Err(resp.text().await.unwrap_or_default());
     }
     resp.json().await.map_err(|e| format!("{e}"))
-}
-
-#[tauri::command]
-pub async fn delete_schedule(id: String) -> Result<(), String> {
-    delete(&format!("/schedules/{}", urlencoding::encode(&id))).await
 }
 
 // --- Docker Hub Tag Autocomplete ---
@@ -4366,11 +3846,6 @@ pub async fn fetch_image_tags(image: String) -> Result<Vec<String>, String> {
 // --- Gateway ---
 
 #[tauri::command]
-pub async fn gateway_status() -> Result<serde_json::Value, String> {
-    get_json("/gateway/status").await
-}
-
-#[tauri::command]
 pub async fn gateway_start() -> Result<serde_json::Value, String> {
     let base = daemon_url();
     let resp = authed_client_with_timeout(120)
@@ -4383,16 +3858,6 @@ pub async fn gateway_start() -> Result<serde_json::Value, String> {
         return Err(body);
     }
     resp.json().await.map_err(|e| format!("Invalid response: {e}"))
-}
-
-#[tauri::command]
-pub async fn gateway_stop() -> Result<(), String> {
-    post_empty("/gateway/stop").await
-}
-
-#[tauri::command]
-pub async fn gateway_list_routes() -> Result<serde_json::Value, String> {
-    get_json("/gateway/routes").await
 }
 
 #[tauri::command]
@@ -4460,11 +3925,6 @@ pub async fn gateway_check_ports(http_port: Option<u16>, https_port: Option<u16>
 }
 
 #[tauri::command]
-pub async fn gateway_get_config() -> Result<serde_json::Value, String> {
-    get_json("/gateway/config").await
-}
-
-#[tauri::command]
 pub async fn gateway_update_config(
     domain: String,
     http_port: u16,
@@ -4496,28 +3956,6 @@ pub async fn gateway_update_config(
 }
 
 #[tauri::command]
-pub async fn gateway_get_links() -> Result<serde_json::Value, String> {
-    get_json("/gateway/links").await
-}
-
-#[tauri::command]
-pub async fn gateway_update_links(links: serde_json::Value) -> Result<(), String> {
-    let base = daemon_url();
-    let resp = client()
-        .put(format!("{base}/gateway/links"))
-        .json(&links)
-        .send()
-        .await
-        .map_err(|e| format!("Daemon connection failed: {e}"))?;
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        let body = resp.text().await.unwrap_or_default();
-        Err(body)
-    }
-}
-
-#[tauri::command]
 pub async fn gateway_dismiss_suggestion(key: String) -> Result<(), String> {
     let base = daemon_url();
     let resp = client()
@@ -4532,21 +3970,6 @@ pub async fn gateway_dismiss_suggestion(key: String) -> Result<(), String> {
         let body = resp.text().await.unwrap_or_default();
         Err(body)
     }
-}
-
-#[tauri::command]
-pub async fn gateway_clear_dismissed() -> Result<(), String> {
-    post_empty("/gateway/clear-dismissed").await
-}
-
-#[tauri::command]
-pub async fn gateway_get_dismissed() -> Result<serde_json::Value, String> {
-    get_json("/gateway/dismissed-suggestions").await
-}
-
-#[tauri::command]
-pub async fn gateway_traefik_status() -> Result<serde_json::Value, String> {
-    get_json("/gateway/traefik-status").await
 }
 
 #[tauri::command]

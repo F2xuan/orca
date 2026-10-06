@@ -1,5 +1,6 @@
 import { createSignal, For, Show, onMount, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonGet } from "../lib/daemonClient";
 import DOMPurify from "dompurify";
 import type { AiResponse, AiContext } from "../lib/types";
 import { t } from "../lib/i18n";
@@ -26,10 +27,10 @@ export default function AiWindow() {
 
   const checkCredentials = async () => {
     try {
-      const settings = (await invoke("get_ai_settings")) as {
+      const settings = await daemonGet<{
         has_anthropic_key: boolean;
         has_openai_key: boolean;
-      };
+      }>("/settings/ai");
       setHasCredentials(settings.has_anthropic_key || settings.has_openai_key);
     } catch {
       setHasCredentials(false);

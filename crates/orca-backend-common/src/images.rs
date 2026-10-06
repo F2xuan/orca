@@ -83,6 +83,9 @@ impl ImageManager for BollardRuntime {
             .map(|img| Image {
                 id: img.id.clone(),
                 repo_tags: img.repo_tags.clone(),
+                // Free on the list call: the summary already carries them, so
+                // update checks need no extra inspect per image.
+                repo_digests: img.repo_digests.clone(),
                 size_bytes: img.size as u64,
                 created_at: img.created.to_string(),
                 used_by: usage
@@ -166,6 +169,7 @@ impl ImageManager for BollardRuntime {
         Ok(Image {
             id: full_id,
             repo_tags: info.repo_tags.unwrap_or_default(),
+            repo_digests: info.repo_digests.unwrap_or_default(),
             size_bytes: info.size.unwrap_or(0) as u64,
             created_at: info.created.unwrap_or_default(),
             used_by,

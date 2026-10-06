@@ -1,5 +1,6 @@
 import { createSignal, Show, For, onMount, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonGet } from "../lib/daemonClient";
 import { showToast } from "./Toast";
 import { t } from "../lib/i18n";
 import Spinner from "./Spinner";
@@ -35,7 +36,7 @@ export default function RunContainerDialog(props: RunContainerDialogProps) {
     // Fetch available networks
     (async () => {
       try {
-        const nets = (await invoke("list_networks")) as Array<{ name: string; driver: string }>;
+        const nets = await daemonGet<Array<{ name: string; driver: string }>>("/networks");
         if (disposed) return;
         const builtIn = ["bridge", "host", "none"];
         const options = builtIn.map((n) => ({ value: n, label: n }));

@@ -1,6 +1,7 @@
 import { createSignal, createEffect, onMount, onCleanup, For, Index, Show, untrack } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonDelete, daemonGet, daemonPost } from "../lib/daemonClient";
 import { listen } from "@tauri-apps/api/event";
 import type { Image, ImageSearchResult, ImageUse, ScanResult } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
@@ -192,7 +193,7 @@ export default function ImagesPage(props: ImagesPageProps) {
 
   const refresh = async () => {
     try {
-      const result = (await invoke("list_images")) as Image[];
+      const result = await daemonGet<Image[]>("/images");
       setImages(result);
       setLastUpdated(new Date());
       setLoadError(null);
@@ -336,7 +337,7 @@ export default function ImagesPage(props: ImagesPageProps) {
     if (!await confirmDanger(t("Remove Image"), t("Remove image '{tag}'?", { tag }))) return;
     setDeletingImageId(id);
     try {
-      await invoke("remove_image", { id });
+      await daemonDelete(`/images/${encodeURIComponent(id)}`);
       showToast(t("Image removed"), "success");
       await refresh();
     } catch (err) {
@@ -374,10 +375,10 @@ export default function ImagesPage(props: ImagesPageProps) {
         const remaining = Array.from(selected());
         if (remaining.length === 0) break;
         try {
-          const result = (await invoke("batch_delete_images", {
+          const result = await daemonPost<any>("/images/batch-delete", {
             ids: remaining,
             force: true,
-          })) as any;
+          });
           const deleted = result.deleted?.length || 0;
           totalDeleted += deleted;
           lastErrors = result.errors?.length || 0;
@@ -406,7 +407,7 @@ export default function ImagesPage(props: ImagesPageProps) {
   const pruneUnused = async () => {
     setPruning(true);
     try {
-      const result = (await invoke("prune_images")) as any;
+      const result = await daemonPost<any>("/images/prune");
       const count = result.images_deleted?.length || 0;
       const space = formatBytes(result.space_reclaimed || 0);
       showToast(t("Pruned {count} images, freed {space}", { count, space }), "success");
@@ -732,7 +733,9 @@ export default function ImagesPage(props: ImagesPageProps) {
     const current = fileBrowserPath();
     const fullPath = current === "/" ? `/${filePath}` : `${current}/${filePath}`;
     try {
-      const result = (await invoke("image_read_file", { id: imageId, path: fullPath })) as { content: string };
+      const result = await daemonGet<{ content: string }>(
+        `/images/${encodeURIComponent(imageId)}/file?path=${encodeURIComponent(fullPath)}`,
+      );
       setFileContent(result.content);
       setFileContentPath(filePath);
     } catch (e) {
@@ -908,7 +911,7 @@ export default function ImagesPage(props: ImagesPageProps) {
     try {
       const [data, history] = await Promise.all([
         invoke("inspect_image", { id }),
-        invoke("image_history", { id }).catch(() => []),
+        daemonGet(`/images/${encodeURIComponent(id)}/history`).catch(() => []),
       ]);
       setInspectData(data);
       setImageHistoryData(Array.isArray(history) ? history : []);

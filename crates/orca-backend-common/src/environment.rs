@@ -3044,6 +3044,19 @@ pub async fn get_system_resources() -> Option<SystemResources> {
     })
 }
 
+/// Used percentage of the root filesystem, or `None` when it cannot be read.
+///
+/// Wraps [`get_system_resources`] rather than re-running `df`, so there is one
+/// implementation of "how full is the disk" and the monitor cannot drift from
+/// the value the health panel shows.
+///
+/// `None` is deliberately not `0.0`: zero is below the alert's clear
+/// threshold, so reporting a failed read as zero would *close* an open disk
+/// alert and announce that the disk had been fixed.
+pub async fn root_disk_used_pct() -> Option<f64> {
+    get_system_resources().await.map(|res| res.disk_usage_percent)
+}
+
 /// Full system health check.
 pub async fn check_system_health() -> SystemHealth {
     let connected = check_docker_connection().await;

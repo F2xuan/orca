@@ -1,10 +1,20 @@
-import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
+import { createSignal, createEffect, untrack, onMount, onCleanup, Show, For } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { useSystemHealth } from "../lib/pollStore";
 import { showToast } from "./Toast";
 import { t } from "../lib/i18n";
 import { getAlertEvents, getUnreadCount, markAllRead, clearEvents } from "../lib/activityStore";
+import {
+  getDaemonAlerts,
+  getDaemonOpenCount,
+  getDaemonAlertsError,
+  refreshAlerts,
+  resolveAlert,
+  alertSummary,
+  alertLevelClass,
+} from "../lib/daemonAlerts";
 import { openAiWindow } from "./AiAssistant";
-import type { SystemHealth, RemoteHost, ActiveHost } from "../lib/types";
+import type { RemoteHost, ActiveHost } from "../lib/types";
 
 interface TitlebarProps {
   daemonStatus: string;
@@ -30,6 +40,17 @@ export default function Titlebar(props: TitlebarProps) {
   const [warningCount, setWarningCount] = createSignal(0);
   const [runtimeInfo, setRuntimeInfo] = createSignal<string | null>(null);
   const [bellOpen, setBellOpen] = createSignal(false);
+
+  /**
+   * Unread activity plus *open* daemon alerts.
+   *
+   * Both mean "something wants your attention": an unread activity entry is a
+   * notification you have not seen, an open daemon alert is a problem that is
+   * still true. Counting the whole alert list here — as this did — counted
+   * dismissed rows too, so the badge never went down when one was dismissed,
+   * and it never went up for an alert the user had not fetched the list to see.
+   */
+  const badgeCount = () => getUnreadCount() + getDaemonOpenCount();
   const [hostMenuOpen, setHostMenuOpen] = createSignal(false);
   const [remoteHosts, setRemoteHosts] = createSignal<RemoteHost[]>([]);
   const [activeHost, setActiveHost] = createSignal<ActiveHost>({ id: null, name: "Local", url: "", is_remote: false });
@@ -58,29 +79,37 @@ export default function Titlebar(props: TitlebarProps) {
     }
   };
 
-  const pollHealth = async () => {
-    try {
-      const health = (await invoke("system_health")) as SystemHealth;
-      const prevConnected = dockerConnected();
-      setDockerConnected(health.docker_connected);
-      setWarningCount(health.warnings.length);
-      setRuntimeInfo(health.docker_version ? `Docker ${health.docker_version}` : null);
+  // Shared with the status bar: one timer and one request for `system_health`
+  // instead of one per component (they used to poll it at 10s and at 15s).
+  const healthPoll = useSystemHealth(10_000);
 
-      // Detect reconnection
-      if (prevConnected === false && health.docker_connected) {
-        showToast(t("Docker connection restored"), "success");
-      }
-    } catch {
-      // Daemon not reachable — docker status unknown
+  createEffect(() => {
+    if (healthPoll.error()) {
+      // Daemon not reachable — docker status unknown. Checking the error first
+      // matters: on a failed refresh the poll keeps the last good value, and the
+      // titlebar is the subscriber that must *clear* rather than show it stale.
       setDockerConnected(null);
       setWarningCount(0);
+      return;
     }
-  };
+    const health = healthPoll.data();
+    if (!health) return;
+    // `untrack`: this effect writes `dockerConnected`, so reading it as a
+    // dependency would make the effect re-run on its own write. The value is
+    // only needed to compare against the previous poll.
+    const prevConnected = untrack(dockerConnected);
+    setDockerConnected(health.docker_connected);
+    setWarningCount(health.warnings.length);
+    setRuntimeInfo(health.docker_version ? `Docker ${health.docker_version}` : null);
+
+    // Detect reconnection
+    if (prevConnected === false && health.docker_connected) {
+      showToast(t("Docker connection restored"), "success");
+    }
+  });
 
   onMount(() => {
-    pollHealth();
     loadHosts();
-    const interval = setInterval(pollHealth, 10_000);
 
     // Reload hosts when settings change
     const onRefresh = () => loadHosts();
@@ -105,7 +134,6 @@ export default function Titlebar(props: TitlebarProps) {
     document.addEventListener("mousedown", handleClickOutside);
 
     onCleanup(() => {
-      clearInterval(interval);
       document.removeEventListener("mousedown", handleClickOutside);
     });
   });
@@ -264,13 +292,19 @@ export default function Titlebar(props: TitlebarProps) {
             onClick={() => {
               const opening = !bellOpen();
               setBellOpen(opening);
-              if (opening) markAllRead();
+              if (opening) {
+                markAllRead();
+                // Fetched when the panel opens rather than polled: it changes
+                // rarely, and a poller would cost a request every few seconds
+                // to keep a closed panel up to date.
+                void refreshAlerts();
+              }
             }}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
-            <Show when={getUnreadCount() > 0}>
+            <Show when={badgeCount() > 0}>
               <span class="notification-badge">
-                {getUnreadCount() > 99 ? "99+" : getUnreadCount()}
+                {badgeCount() > 99 ? "99+" : badgeCount()}
               </span>
             </Show>
           </button>
@@ -279,16 +313,64 @@ export default function Titlebar(props: TitlebarProps) {
               <div class="notification-dropdown-header">
                 <span>{t("Notifications")}</span>
                 <span style={{ color: "#8b949e", "font-weight": "400" }}>
-                  {t("{count} alerts", { count: getAlertEvents().length })}
+                  {t("{count} alerts", {
+                    count: getAlertEvents().length + getDaemonAlerts().length,
+                  })}
                 </span>
               </div>
               <div class="notification-dropdown-body">
+                <Show when={getDaemonAlerts().length > 0}>
+                  <div
+                    style={{
+                      padding: "6px 12px",
+                      "font-size": "11px",
+                      "text-transform": "uppercase",
+                      "letter-spacing": "0.04em",
+                      color: "#8b949e",
+                    }}
+                  >
+                    {t("Daemon alerts")}
+                  </div>
+                  <For each={getDaemonAlerts().slice(0, 10)}>
+                    {(alert) => (
+                      <div class="activity-event">
+                        <div
+                          class={`activity-event-icon activity-icon-${alertLevelClass(alert.level)}`}
+                        >
+                          {alert.level === "error" || alert.level === "critical" ? "\u2717" : "\u26A0"}
+                        </div>
+                        <div class="activity-event-body">
+                          <div class="activity-event-title">{alertSummary(alert)}</div>
+                          <div class="activity-event-time">
+                            {relativeTime(new Date(alert.ts))}
+                          </div>
+                        </div>
+                        <Show when={!alert.resolved}>
+                          <button
+                            class="notification-view-all"
+                            title={t("Dismiss")}
+                            onClick={() => void resolveAlert(alert.id)}
+                          >
+                            {t("Dismiss")}
+                          </button>
+                        </Show>
+                      </div>
+                    )}
+                  </For>
+                </Show>
+                <Show when={getDaemonAlertsError()}>
+                  <div style={{ padding: "8px 12px", color: "#8b949e", "font-size": "12px" }}>
+                    {getDaemonAlertsError()}
+                  </div>
+                </Show>
                 <Show
                   when={getAlertEvents().length > 0}
                   fallback={
-                    <div style={{ padding: "20px", "text-align": "center", color: "#8b949e", "font-size": "12px" }}>
-                      {t("No errors or warnings")}
-                    </div>
+                    <Show when={getDaemonAlerts().length === 0}>
+                      <div style={{ padding: "20px", "text-align": "center", color: "#8b949e", "font-size": "12px" }}>
+                        {t("No errors or warnings")}
+                      </div>
+                    </Show>
                   }
                 >
                   <For each={getAlertEvents().slice(0, 10)}>

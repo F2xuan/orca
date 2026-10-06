@@ -1,5 +1,6 @@
-import { createSignal, onMount, onCleanup, Show } from "solid-js";
+import { createSignal, createEffect, onMount, onCleanup, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { useSystemHealth } from "../lib/pollStore";
 import { getVersion } from "@tauri-apps/api/app";
 import type { SystemHealth, ActiveHost } from "../lib/types";
 import { showToast } from "./Toast";
@@ -18,11 +19,19 @@ export default function StatusBar(props: StatusBarProps) {
   const [appVersion, setAppVersion] = createSignal<string | null>(null);
   const [activeHost, setActiveHost] = createSignal<ActiveHost | null>(null);
 
-  const pollHealth = async () => {
-    try {
-      const h = (await invoke("system_health")) as SystemHealth;
-      setHealth(h);
-    } catch { /* daemon not ready */ }
+  // Shared with the titlebar (see pollStore): one timer for `system_health`.
+  const healthPoll = useSystemHealth(15_000);
+
+  createEffect(() => {
+    const h = healthPoll.data();
+    // Unlike the titlebar this keeps the last known health on a failed refresh,
+    // so it only reads `data` and ignores `error`.
+    if (h) setHealth(h);
+  });
+
+  // Not a plain forwarder (it resolves the active host from local state), so it
+  // keeps its own timer.
+  const pollActiveHost = async () => {
     try {
       const host = (await invoke("get_active_host")) as ActiveHost;
       setActiveHost(host);
@@ -82,14 +91,14 @@ export default function StatusBar(props: StatusBarProps) {
   };
 
   onMount(() => {
-    pollHealth();
+    pollActiveHost();
     // Check for updates after 5 seconds, then every hour. The initial
     // setTimeout handle must be captured so we can cancel it if the
     // component unmounts before the 5s elapses.
     const initialUpdateTimer = setTimeout(checkUpdate, 5000);
     const updateInterval = setInterval(checkUpdate, 3600000);
     getVersion().then((v) => { if (!disposed) setAppVersion(v); }).catch(() => {});
-    const interval = setInterval(pollHealth, 15000);
+    const interval = setInterval(pollActiveHost, 15000);
     onCleanup(() => {
       disposed = true;
       clearTimeout(initialUpdateTimer);

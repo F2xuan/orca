@@ -17,7 +17,132 @@ use orca_core::volume::VolumeManager;
 use crate::state::AppState;
 
 /// Execute a named tool with the given JSON arguments.
+///
+/// This is the single choke point for every agent tool call: the MCP endpoint,
+/// the OpenAI-compatible function-calling loop, and the direct
+/// `POST /agent/execute` route all dispatch through here. The risk gate lives
+/// here for exactly that reason — a policy enforced at four call sites is a
+/// policy that will eventually be enforced at three.
+///
+/// Operation recording lives here too, for the same reason. The heavy lifting is
+/// in [`dispatch_tool`]; this function only decides whether the call is allowed
+/// and whether it is worth recording.
 pub async fn execute_tool(
+    state: &Arc<AppState>,
+    tool_name: &str,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    // Snapshot the ceiling and release the lock immediately: `ToolRisk` is
+    // `Copy`, and holding the config lock across a tool call would deadlock any
+    // tool that needs the config.
+    let allowed = state.config.lock().await.agent_risk;
+
+    let risk = match orca_core::agent_tools::tool_risk(tool_name) {
+        Some(risk) if risk.is_permitted_by(allowed) => risk,
+        Some(risk) => {
+            return Err(format!(
+                "Tool '{tool_name}' is a '{}' operation, but the agent is limited to \
+                 '{}'. Raise \"Maximum agent tool risk\" in Orca's settings to allow it.",
+                risk.as_str(),
+                allowed.as_str()
+            ));
+        }
+        // An unrecognised name is refused rather than passed through: the
+        // fallback tier for an unclassified tool is `Destructive`, and a caller
+        // must never be able to reach a tool by guessing a name.
+        None => return Err(format!("Unknown tool: {tool_name}")),
+    };
+
+    // Read-only tools run unrecorded: they are cheap, frequent, and would bury
+    // the writes a user actually wants to audit under thousands of `list_*`
+    // rows.
+    //
+    // Anything that mutates is recorded with `OperationActor::Agent`. The risk
+    // ceiling above bounds what the agent *may* do; this records what it *did*,
+    // which is the question that matters after an injection has been found.
+    // Recording happens here, at the single dispatch point, rather than at the
+    // six call sites that reach this function.
+    if risk == orca_core::agent_tools::ToolRisk::Read {
+        return dispatch_tool(state, tool_name, arguments).await;
+    }
+
+    let target = describe_target(tool_name, &arguments);
+    crate::operations::run(
+        operation_kind_for_tool(tool_name),
+        target,
+        orca_core::operation::OperationActor::Agent,
+        {
+            let state = state.clone();
+            let tool_name = tool_name.to_string();
+            async move {
+                dispatch_tool(&state, &tool_name, arguments)
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+        },
+        crate::operations::always_ok,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Which recorded kind best describes a mutating agent tool.
+///
+/// Anything without a specific kind falls back to `AgentTool`, whose `target`
+/// carries the tool name — better than `Unknown`, which would tell a reader
+/// nothing at all.
+fn operation_kind_for_tool(tool_name: &str) -> orca_core::operation::OperationKind {
+    use orca_core::operation::OperationKind;
+    match tool_name {
+        "pull_image" => OperationKind::PullImage,
+        "prune_images" => OperationKind::PruneImages,
+        "compose_up" => OperationKind::ComposeUp,
+        "compose_down" => OperationKind::ComposeDown,
+        "deploy_template" => OperationKind::DeployTemplate,
+        _ => OperationKind::AgentTool,
+    }
+}
+
+/// A short description of what a tool call acted on, for the operation log.
+///
+/// Deliberately lossy: this is for scanning a list of what the agent did, not
+/// for replaying the call. Only the first recognised scalar argument is used,
+/// and it is truncated, because an operation log full of whole argument blobs
+/// is one nobody reads.
+fn describe_target(tool_name: &str, arguments: &serde_json::Value) -> String {
+    const KEYS: [&str; 8] = [
+        "id",
+        "name",
+        "image",
+        "container",
+        "pod",
+        "deployment",
+        "template",
+        "path",
+    ];
+    let subject = KEYS
+        .iter()
+        .find_map(|key| arguments.get(*key).and_then(|value| value.as_str()))
+        .unwrap_or("");
+    if subject.is_empty() {
+        return tool_name.to_string();
+    }
+    // Truncate by characters, never by bytes: a multi-byte name sliced at a
+    // byte offset would panic.
+    let truncated: String = if subject.chars().count() > 80 {
+        subject.chars().take(80).collect::<String>() + "…"
+    } else {
+        subject.to_string()
+    };
+    format!("{tool_name}({truncated})")
+}
+
+/// The tool dispatch table.
+///
+/// Split out of `execute_tool` so the risk gate and operation recording wrap
+/// *every* caller — there are six — instead of being repeated at each one and
+/// eventually forgotten at one.
+async fn dispatch_tool(
     state: &Arc<AppState>,
     tool_name: &str,
     arguments: serde_json::Value,
@@ -665,4 +790,99 @@ async fn resolve_stack_dir(state: &AppState, name: &str) -> Result<(String, Opti
         .working_dir
         .ok_or_else(|| format!("Stack '{name}' has no working directory"))?;
     Ok((working_dir, stack.config_file))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orca_core::operation::OperationKind;
+
+    #[test]
+    fn mutating_tools_map_to_their_own_kind() {
+        assert_eq!(operation_kind_for_tool("pull_image"), OperationKind::PullImage);
+        assert_eq!(operation_kind_for_tool("prune_images"), OperationKind::PruneImages);
+        assert_eq!(operation_kind_for_tool("compose_up"), OperationKind::ComposeUp);
+        assert_eq!(operation_kind_for_tool("compose_down"), OperationKind::ComposeDown);
+        assert_eq!(
+            operation_kind_for_tool("deploy_template"),
+            OperationKind::DeployTemplate
+        );
+    }
+
+    /// The long tail must be *described*, not dropped, so `AgentTool` rather
+    /// than `Unknown` — `Unknown` would tell a reader of the history nothing.
+    #[test]
+    fn other_mutating_tools_fall_back_to_agent_tool_not_unknown() {
+        for tool in [
+            "remove_container",
+            "remove_image",
+            "exec_in_container",
+            "k8s_delete_pod",
+            "create_and_run_container",
+        ] {
+            assert_eq!(
+                operation_kind_for_tool(tool),
+                OperationKind::AgentTool,
+                "{tool} should be recorded as an agent tool"
+            );
+        }
+    }
+
+    #[test]
+    fn target_names_the_subject_when_one_is_present() {
+        let arguments = serde_json::json!({"id": "abc123", "force": true});
+        assert_eq!(describe_target("remove_container", &arguments), "remove_container(abc123)");
+
+        let arguments = serde_json::json!({"image": "alpine:3.20"});
+        assert_eq!(describe_target("pull_image", &arguments), "pull_image(alpine:3.20)");
+
+        let arguments = serde_json::json!({"path": "/tmp/ctx"});
+        assert_eq!(describe_target("compose_up", &arguments), "compose_up(/tmp/ctx)");
+    }
+
+    #[test]
+    fn target_falls_back_to_the_tool_name() {
+        // No recognised key, an empty string, and a non-string value all have to
+        // produce something rather than an empty target.
+        assert_eq!(describe_target("prune_images", &serde_json::json!({})), "prune_images");
+        assert_eq!(
+            describe_target("prune_images", &serde_json::json!({"id": ""})),
+            "prune_images"
+        );
+        assert_eq!(
+            describe_target("prune_images", &serde_json::json!({"id": 42})),
+            "prune_images",
+            "a non-string subject is not silently stringified"
+        );
+    }
+
+    /// Truncation must count characters, not bytes: slicing a multi-byte name at
+    /// a byte offset panics.
+    #[test]
+    fn long_targets_are_truncated_by_character() {
+        let long = "日".repeat(200);
+        let target = describe_target("pull_image", &serde_json::json!({ "image": long }));
+        assert!(target.starts_with("pull_image("));
+        assert!(target.ends_with("…)"));
+        // 80 characters kept, plus the tool name, parens, and the ellipsis.
+        assert_eq!(target.chars().count(), "pull_image(".chars().count() + 80 + 1 + 1);
+
+        // A name at exactly the limit is left alone.
+        let exact = "a".repeat(80);
+        let target = describe_target("pull_image", &serde_json::json!({ "image": exact }));
+        assert!(!target.ends_with('…'));
+    }
+
+    /// Every tool the agent can actually reach must be classifiable, or the
+    /// gate and the recording would disagree about what exists.
+    #[test]
+    fn read_tier_tools_are_recognised_by_the_gate() {
+        use orca_core::agent_tools::{tool_risk, ToolRisk};
+        // The read/write boundary is what decides whether recording happens, so
+        // it is worth pinning that a known read tool is Read and a known writer
+        // is not.
+        assert_eq!(tool_risk("list_containers"), Some(ToolRisk::Read));
+        assert_eq!(tool_risk("compose_up"), Some(ToolRisk::Write));
+        assert_eq!(tool_risk("remove_container"), Some(ToolRisk::Destructive));
+    }
 }

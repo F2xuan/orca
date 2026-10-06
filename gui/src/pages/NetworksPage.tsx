@@ -1,6 +1,6 @@
 import { createSignal, onMount, For, Index, Show, untrack } from "solid-js";
 import { t } from "../lib/i18n";
-import { invoke } from "@tauri-apps/api/core";
+import { daemonDelete, daemonErrorMessage, daemonGet, daemonPost } from "../lib/daemonClient";
 import type { Network } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
 import { showToast } from "../components/Toast";
@@ -38,7 +38,7 @@ export default function NetworksPage() {
 
   const refresh = async () => {
     try {
-      const result = (await invoke("list_networks")) as Network[];
+      const result = await daemonGet<Network[]>("/networks");
       setNetworks(result);
     } catch (e) {
       logError(`Failed to list networks: ${e}`);
@@ -48,7 +48,7 @@ export default function NetworksPage() {
 
   const refreshTopology = async () => {
     try {
-      const result = (await invoke("network_topology")) as TopologyNetwork[];
+      const result = await daemonGet<TopologyNetwork[]>("/networks/topology");
       setTopology(result);
     } catch (e) {
       logError(`Failed to load topology: ${e}`);
@@ -72,12 +72,12 @@ export default function NetworksPage() {
     e.stopPropagation();
     if (!await confirmDanger(t("Remove Network"), t("Remove network \"{name}\"?", { name }))) return;
     try {
-      await invoke("remove_network", { name });
+      await daemonDelete(`/networks/${encodeURIComponent(name)}`);
       showToast(t("Network \"{name}\" removed", { name }), "success");
       await refresh();
     } catch (err) {
       logError(`Failed to remove network: ${err}`, `Network "${name}"`);
-      showToast(t("Failed to remove network: {error}", { error: String(err) }), "error");
+      showToast(t("Failed to remove network: {error}", { error: daemonErrorMessage(err) }), "error");
     }
   };
 
@@ -88,9 +88,12 @@ export default function NetworksPage() {
 
     setCreating(true);
     try {
-      await invoke("create_network", {
+      const driver = createDriver().trim();
+      await daemonPost("/networks", {
         name,
-        driver: createDriver().trim() || null,
+        // Same trap as volumes: the daemon defaults the driver only when the
+        // field is absent, so an empty string is not the "bridge" default.
+        ...(driver ? { driver } : {}),
       });
       showToast(t("Network \"{name}\" created", { name }), "success");
       setCreateName("");
@@ -100,7 +103,7 @@ export default function NetworksPage() {
       if (topologyView()) refreshTopology();
     } catch (err) {
       logError(`Failed to create network: ${err}`, `Network "${name}", driver "${createDriver()}"`);
-      showToast(t("Failed to create network: {error}", { error: String(err) }), "error");
+      showToast(t("Failed to create network: {error}", { error: daemonErrorMessage(err) }), "error");
     }
     setCreating(false);
   };

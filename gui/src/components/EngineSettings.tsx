@@ -1,6 +1,11 @@
 import { createSignal, onMount, Show, type JSX } from "solid-js";
 import { t } from "../lib/i18n";
-import { invoke } from "@tauri-apps/api/core";
+import {
+  daemonErrorMessage,
+  daemonGet,
+  daemonPost,
+  daemonPut,
+} from "../lib/daemonClient";
 import { showToast } from "./Toast";
 import { confirmDanger } from "./ConfirmDialog";
 import { logError } from "../lib/activityStore";
@@ -160,7 +165,7 @@ export default function EngineSettings() {
   const refresh = async () => {
     setLoading(true);
     try {
-      const r = (await invoke("get_engine_config")) as EngineConfigResponse;
+      const r = await daemonGet<EngineConfigResponse>("/environment/engine-config");
       const c = r?.config ?? {};
       const asLines = (v: unknown) => (Array.isArray(v) ? v.join("\n") : "");
       const asStr = (v: unknown) => (v === null || v === undefined ? "" : String(v));
@@ -248,12 +253,12 @@ export default function EngineSettings() {
 
     setSaving(true);
     try {
-      await invoke("set_engine_config", { patch });
+      await daemonPut("/environment/engine-config", patch);
       showToast(t("Engine settings saved. Restart Docker to apply."), "success");
       await refresh();
     } catch (e) {
-      logError(`Failed to save engine settings: ${e}`, "Docker Engine");
-      showToast(t("Failed to save engine settings: {error}", { error: String(e) }), "error");
+      logError(`Failed to save engine settings: ${daemonErrorMessage(e)}`, "Docker Engine");
+      showToast(t("Failed to save engine settings: {error}", { error: daemonErrorMessage(e) }), "error");
     }
     setSaving(false);
   };
@@ -263,7 +268,7 @@ export default function EngineSettings() {
     try {
       parsed = JSON.parse(raw());
     } catch (e) {
-      showToast(t("Invalid JSON: {error}", { error: String(e) }), "error");
+      showToast(t("Invalid JSON: {error}", { error: daemonErrorMessage(e) }), "error");
       return;
     }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -279,12 +284,12 @@ export default function EngineSettings() {
 
     setSaving(true);
     try {
-      await invoke("set_engine_config_raw", { config: parsed });
+      await daemonPut("/environment/engine-config/raw", { config: parsed });
       showToast(t("Engine settings saved. Restart Docker to apply."), "success");
       await refresh();
     } catch (e) {
-      logError(`Failed to save raw engine settings: ${e}`, "Docker Engine");
-      showToast(t("Failed to save engine settings: {error}", { error: String(e) }), "error");
+      logError(`Failed to save raw engine settings: ${daemonErrorMessage(e)}`, "Docker Engine");
+      showToast(t("Failed to save engine settings: {error}", { error: daemonErrorMessage(e) }), "error");
     }
     setSaving(false);
   };
@@ -298,14 +303,14 @@ export default function EngineSettings() {
 
     setRestarting(true);
     try {
-      await invoke("restart_docker_engine");
+      await daemonPost("/environment/restart-engine");
       showToast(t("Docker is restarting. This can take up to a minute."), "info");
       // Poll until the engine reports the on-disk config as live so the banner
       // clears itself instead of staying wrong until the next reload.
       for (let i = 0; i < 40; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         try {
-          const r = (await invoke("get_engine_config")) as EngineConfigResponse;
+          const r = await daemonGet<EngineConfigResponse>("/environment/engine-config");
           if (r && r.restart_required === false) break;
         } catch {
           // Engine still down — keep waiting.
@@ -314,7 +319,7 @@ export default function EngineSettings() {
       await refresh();
     } catch (e) {
       logError(`Failed to restart Docker: ${e}`, "Docker Engine");
-      showToast(t("Failed to restart Docker: {error}", { error: String(e) }), "error");
+      showToast(t("Failed to restart Docker: {error}", { error: daemonErrorMessage(e) }), "error");
     }
     setRestarting(false);
   };

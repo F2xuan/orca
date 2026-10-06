@@ -16,11 +16,10 @@ use orca_core::kubernetes::K8sManager;
 
 fn create_manager() -> Option<K3sManager> {
     let manager = K3sManager::from_env();
-    // Check if we can actually reach a cluster
+    // Check if we can actually reach a cluster. Both sources feed the same
+    // `Some(manager)`, so they are one condition, not two branches.
     let kubeconfig = manager.kubeconfig_path_for_test();
-    if kubeconfig.exists() {
-        Some(manager)
-    } else if std::env::var("KUBECONFIG").is_ok() {
+    if kubeconfig.exists() || std::env::var("KUBECONFIG").is_ok() {
         Some(manager)
     } else {
         eprintln!("Skipping: no KUBECONFIG set and no default kubeconfig found");

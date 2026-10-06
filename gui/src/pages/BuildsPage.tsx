@@ -1,6 +1,7 @@
 import { createSignal, onMount, For, Show } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonDelete, daemonErrorMessage, daemonGet, daemonPost } from "../lib/daemonClient";
 import type { BuildRecord, BuildStats, BuildTarget, BuildComparison, CacheAnalysis } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
 import { showToast } from "../components/Toast";
@@ -103,9 +104,9 @@ export default function BuildsPage(props: BuildsPageProps) {
   const refresh = async () => {
     try {
       const [buildsResult, statsResult, targetsResult] = await Promise.all([
-        invoke("list_builds") as Promise<BuildRecord[]>,
-        invoke("get_build_stats") as Promise<BuildStats>,
-        invoke("list_build_targets") as Promise<BuildTarget[]>,
+        daemonGet<BuildRecord[]>("/builds"),
+        daemonGet<BuildStats>("/builds/stats"),
+        daemonGet<BuildTarget[]>("/builds/targets"),
       ]);
       setBuilds(buildsResult || []);
       setStats(statsResult || null);
@@ -132,7 +133,7 @@ export default function BuildsPage(props: BuildsPageProps) {
     setBuildLogs("");
     try {
       const [detail, logs] = await Promise.all([
-        invoke("get_build", { id }) as Promise<BuildRecord>,
+        daemonGet<BuildRecord>(`/builds/${encodeURIComponent(id)}`),
         invoke("get_build_logs", { id }) as Promise<string>,
       ]);
       setBuildDetail(detail);
@@ -148,7 +149,7 @@ export default function BuildsPage(props: BuildsPageProps) {
     e?.stopPropagation();
     if (!await confirmDanger(t("Delete Build"), t("Delete this build record and its logs?"))) return;
     try {
-      await invoke("delete_build", { id });
+      await daemonDelete(`/builds/${encodeURIComponent(id)}`);
       showToast(t("Build deleted"), "success");
       if (selectedBuild() === id) {
         setSelectedBuild(null);
@@ -1069,11 +1070,11 @@ export default function BuildsPage(props: BuildsPageProps) {
   const startTarget = async (name: string) => {
     setBuildingTargets((prev) => { const s = new Set(prev); s.add(name); return s; });
     try {
-      await invoke("start_build_target", { name });
+      await daemonPost(`/builds/targets/${encodeURIComponent(name)}`);
       showToast(t("Build started: {name}", { name }), "success");
       await refresh();
     } catch (e) {
-      showToast(t("Build failed: {error}", { error: String(e) }), "error");
+      showToast(t("Build failed: {error}", { error: daemonErrorMessage(e) }), "error");
     } finally {
       setBuildingTargets((prev) => { const s = new Set(prev); s.delete(name); return s; });
     }
@@ -1085,7 +1086,7 @@ export default function BuildsPage(props: BuildsPageProps) {
     setBuildingAll(true);
     for (const target of targets) {
       try {
-        await invoke("start_build_target", { name: target.name });
+        await daemonPost(`/builds/targets/${encodeURIComponent(target.name)}`);
         showToast(t("Build started: {name}", { name: target.name }), "success");
       } catch (e) {
         showToast(t("Build failed for {name}: {error}", { name: target.name, error: String(e) }), "error");

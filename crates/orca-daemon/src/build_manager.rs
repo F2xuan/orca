@@ -136,6 +136,8 @@ pub async fn start_build(
 
 /// Update a build record (mark complete/failed).
 pub async fn update_build(id: &str, status: BuildStatus, image_id: Option<String>, error: Option<String>) {
+    // Captured before `error` is moved into the record, for the alert below.
+    let failure = (status == BuildStatus::Failed).then(|| error.clone());
     let _guard = HISTORY_LOCK.lock().await;
     let mut history = load_history();
     if let Some(record) = history.iter_mut().find(|r| r.id == id) {
@@ -156,6 +158,80 @@ pub async fn update_build(id: &str, status: BuildStatus, image_id: Option<String
         }
     }
     save_history(history);
+    drop(_guard);
+
+    // Recorded *after* releasing the history lock: the alert is a different
+    // file, and a failing alert write must never be able to block build-history
+    // updates. This is the single place a build's outcome is written, so one
+    // hook here covers every failure path rather than one per endpoint.
+    if let Some(error) = failure {
+        crate::alerts::record_build_failure(id, error.as_deref());
+    }
+}
+
+/// Message recorded against builds that a daemon restart cut short. Exposed so
+/// the API and tests can assert on it rather than duplicating the string.
+pub const INTERRUPTED_ERROR: &str =
+    "interrupted: the daemon restarted while this build was running";
+
+/// Pure core of the startup sweep, split out so the state transition can be
+/// tested without reading or writing the real history file.
+///
+/// Returns how many records changed. Deliberately does **not** set
+/// `duration_secs`: `started_at` is known but the moment the build actually
+/// stopped is not, and `finished_at - started_at` would report "however long
+/// the daemon happened to stay down" as the build's runtime.
+fn interrupt_in_progress(
+    records: &mut [BuildRecord],
+    now: chrono::DateTime<chrono::Utc>,
+) -> usize {
+    let mut interrupted = 0;
+    for record in records.iter_mut() {
+        if record.status != BuildStatus::InProgress {
+            continue;
+        }
+        record.status = BuildStatus::Failed;
+        record.finished_at = Some(now.to_rfc3339());
+        record.error = Some(INTERRUPTED_ERROR.to_string());
+        interrupted += 1;
+    }
+    interrupted
+}
+
+/// Startup reconciliation for build history.
+///
+/// No build can be in flight yet in *this* process, so every record still
+/// marked `InProgress` is by definition a leftover from a process that died
+/// mid-build. That is not hypothetical: [`start_build`] persists the record
+/// *before* the build runs, and `pkill orca-daemon` is a documented,
+/// everyday workflow (`CLAUDE.md`). Without this sweep such a record never
+/// reaches a terminal state, and the UI shows the build spinning forever with
+/// no way to clear it short of editing `index.json` by hand.
+///
+/// Idempotent (a second call finds nothing to do) and conservative: it only
+/// ever moves `InProgress` → `Failed`, and creates or deletes nothing, so a bug
+/// here cannot destroy a user's successful history.
+pub async fn interrupt_in_progress_builds() -> usize {
+    let _guard = HISTORY_LOCK.lock().await;
+    let mut history = load_history();
+    let interrupted = interrupt_in_progress(&mut history, chrono::Utc::now());
+    if interrupted > 0 {
+        save_history(history);
+    }
+    interrupted
+}
+
+/// Drop the cached BuildKit history.
+///
+/// Called when the runtime is hot-swapped. The cache holds records read from
+/// the *previous* engine, and its TTL would otherwise keep serving another
+/// engine's build history for up to `BUILDKIT_CACHE_TTL_SECS` after the user
+/// switches between Docker / Podman / the Orca runtime — a switch the GUI
+/// presents as immediate.
+pub fn invalidate_buildkit_cache() {
+    if let Ok(mut guard) = BUILDKIT_CACHE.lock() {
+        *guard = None;
+    }
 }
 
 /// Append a line to a build's log file.
@@ -491,4 +567,99 @@ pub async fn fetch_buildkit_logs(build_id: &str) -> Option<String> {
     .await
     .ok()
     .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build_manager::BuildStatus;
+
+    fn record(id: &str, status: BuildStatus) -> BuildRecord {
+        BuildRecord {
+            id: id.to_string(),
+            status,
+            tag: format!("app:{id}"),
+            context_path: ".".into(),
+            dockerfile: "Dockerfile".into(),
+            build_args: HashMap::new(),
+            started_at: "2026-01-01T00:00:00+00:00".into(),
+            finished_at: None,
+            duration_secs: None,
+            image_id: None,
+            error: None,
+            log_lines: 0,
+            source: BuildSource::Manual,
+        }
+    }
+
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-01-01T00:10:00+00:00")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn sweep_marks_only_in_progress_records() {
+        let mut records = vec![
+            record("a", BuildStatus::InProgress),
+            record("b", BuildStatus::Success),
+            record("c", BuildStatus::Failed),
+            record("d", BuildStatus::Cancelled),
+            record("e", BuildStatus::InProgress),
+        ];
+
+        let swept = interrupt_in_progress(&mut records, now());
+
+        assert_eq!(swept, 2, "exactly the two InProgress records change");
+        assert_eq!(records[0].status, BuildStatus::Failed);
+        assert_eq!(records[4].status, BuildStatus::Failed);
+        assert_eq!(
+            records[1].status,
+            BuildStatus::Success,
+            "terminal records are untouched"
+        );
+        assert_eq!(records[3].status, BuildStatus::Cancelled);
+    }
+
+    #[test]
+    fn sweep_explains_itself_and_does_not_fabricate_a_duration() {
+        let mut records = vec![record("a", BuildStatus::InProgress)];
+
+        interrupt_in_progress(&mut records, now());
+
+        assert_eq!(records[0].error.as_deref(), Some(INTERRUPTED_ERROR));
+        assert_eq!(
+            records[0].finished_at.as_deref(),
+            Some("2026-01-01T00:10:00+00:00")
+        );
+        assert_eq!(
+            records[0].duration_secs, None,
+            "the build's real stop time is unknown; reporting the daemon's \
+             downtime as runtime would be a lie"
+        );
+    }
+
+    #[test]
+    fn sweep_is_idempotent() {
+        let mut records = vec![record("a", BuildStatus::InProgress)];
+
+        assert_eq!(interrupt_in_progress(&mut records, now()), 1);
+        let after_first = records[0].clone();
+        assert_eq!(
+            interrupt_in_progress(&mut records, now()),
+            0,
+            "a second pass finds nothing left to do"
+        );
+        assert_eq!(records[0].finished_at, after_first.finished_at);
+    }
+
+    #[test]
+    fn sweep_on_empty_or_clean_history_is_a_no_op() {
+        let mut empty: Vec<BuildRecord> = Vec::new();
+        assert_eq!(interrupt_in_progress(&mut empty, now()), 0);
+
+        let mut clean = vec![record("a", BuildStatus::Success)];
+        assert_eq!(interrupt_in_progress(&mut clean, now()), 0);
+        assert_eq!(clean[0].error, None, "no error is invented for clean rows");
+    }
 }

@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "esbuild unit/pollStore.test.ts --bundle --format=esm --platform=node --outfile=unit/.build/unit-test.mjs --log-level=warning && node --test --test-force-exit unit/.build/unit-test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

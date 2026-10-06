@@ -5,6 +5,9 @@
  */
 
 export const zhCN: Record<string, string> = {
+  // ── Alerts (daemon) ────────────────────────────────────────────────────
+  // ("Dismiss" already exists further down — one entry, not two.)
+  "Daemon alerts": "守护进程告警",
   // ── Navigation (Sidebar / Command palette) ──────────────────────────────
   "Fleet": "舰队",
   "Dashboard": "仪表盘",
@@ -1760,5 +1763,13 @@ export const zhCN: Record<string, string> = {
   // ── 模板部署命名 ──
   "Leave empty to auto-generate a unique name — the template's named volumes get the same suffix, so repeat deploys never share data.": "留空即自动生成唯一名称——模板自带的命名存储卷会追加同样的后缀，因此重复部署不会共用同一份数据。",
   "The template's volumes carry this deploy's suffix so two deploys never share data. A name you type yourself is used as-is.": "模板自带的存储卷已带上本次部署的后缀，两次部署不会共用数据；你自己填写的卷名则原样使用。",
+
+
+  // ── Agent 工具风险上限 ──
+  "Maximum agent tool risk": "AI 工具最高风险等级",
+  "Read only (recommended)": "只读（推荐）",
+  "Read and write": "读写",
+  "Read, write, and destructive": "读写与销毁性操作",
+  "Tools the AI agent may run on its own. \"Read only\" blocks anything that changes or deletes containers, images, or stacks — an agent can be misled by text it reads, so keep this as low as you can.": "允许 AI 自行调用的工具范围。“只读”会拦截一切改动或删除容器、镜像、编排栈的操作——AI 可能被它读到的内容误导，因此在够用的前提下应尽量调低。",
 
 };

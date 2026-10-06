@@ -7,6 +7,14 @@ use std::collections::HashMap;
 pub struct Image {
     pub id: String,
     pub repo_tags: Vec<String>,
+    /// Digests this image is known by in a registry, as `repo@sha256:…`.
+    ///
+    /// These are what make update detection possible: a tag is a mutable
+    /// pointer, and the digest is the only thing that identifies content. An
+    /// image built locally has none, which is why update checks are tri-state
+    /// rather than a boolean — see `orca_core::registry::UpdateCheck`.
+    #[serde(default)]
+    pub repo_digests: Vec<String>,
     pub size_bytes: u64,
     pub created_at: String,
     /// Containers referencing this image.

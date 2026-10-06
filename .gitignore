@@ -11,3 +11,9 @@ src-tauri/gen/
 src-tauri/binaries/
 gui/test-results/
 test-results/
+
+# ts-rs fallback output — the canonical generated types live in
+# gui/src/lib/generated and are written by scripts/codegen-types.sh, which sets
+# TS_RS_EXPORT_DIR. Without that env var ts-rs writes here instead, which is how
+# a stale duplicate appeared once. This directory is not referenced by anything.
+crates/orca-core/bindings/

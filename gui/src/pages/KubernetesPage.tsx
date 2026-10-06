@@ -1,6 +1,7 @@
 import { createSignal, onMount, onCleanup, For, Index, Show, createEffect } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonErrorMessage, daemonGet, daemonPost } from "../lib/daemonClient";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { showToast } from "../components/Toast";
 import { useRefresh } from "../lib/useRefresh";
@@ -193,11 +194,11 @@ export default function KubernetesPage() {
 
   const refreshStatus = async () => {
     try {
-      const s = (await invoke("k8s_status")) as ClusterStatus;
+      const s = await daemonGet<ClusterStatus>("/k8s/status");
       setStatus(s);
       if (s.running) {
         try {
-          const ns = (await invoke("k8s_namespaces")) as Namespace[];
+          const ns = await daemonGet<Namespace[]>("/k8s/namespaces");
           if (ns.length > 0) {
             setNamespaces(ns);
             // Only auto-select on first load (when still on default with no data)
@@ -224,7 +225,7 @@ export default function KubernetesPage() {
         }
         // Fetch Traefik integration mode
         try {
-          const ts = (await invoke("gateway_traefik_status")) as { mode: string };
+          const ts = await daemonGet<{ mode: string }>("/gateway/traefik-status");
           setTraefikIntegrationMode(ts.mode);
         } catch {
           setTraefikIntegrationMode(null);
@@ -297,15 +298,15 @@ export default function KubernetesPage() {
       } else if (myTab === "storage") {
         const [pvcResult, pvResult, scResult] = await Promise.allSettled([
           invoke("k8s_pvcs", { namespace: ns }) as Promise<PersistentVolumeClaim[]>,
-          invoke("k8s_pvs") as Promise<PersistentVolume[]>,
-          invoke("k8s_storage_classes") as Promise<StorageClass[]>,
+          daemonGet<PersistentVolume[]>("/k8s/pvs"),
+          daemonGet<StorageClass[]>("/k8s/storage-classes"),
         ]);
         if (stale()) return;
         if (pvcResult.status === "fulfilled") setPvcs(pvcResult.value);
         if (pvResult.status === "fulfilled") setPvs(pvResult.value);
         if (scResult.status === "fulfilled") setStorageClasses(scResult.value);
       } else if (myTab === "crds") {
-        const result = (await invoke("k8s_crds")) as CustomResourceDefinition[];
+        const result = await daemonGet<CustomResourceDefinition[]>("/k8s/crds");
         if (stale()) return;
         setCrds(result);
       } else if (myTab === "events") {
@@ -328,7 +329,7 @@ export default function KubernetesPage() {
             setHelmAvailable(avail.available);
           }
           if (helmAvailable()) {
-            const releases = (await invoke("k8s_helm_list")) as HelmRelease[];
+            const releases = await daemonGet<HelmRelease[]>("/k8s/helm/releases");
             if (stale()) return;
             setHelmReleases(releases);
           }
@@ -419,7 +420,7 @@ export default function KubernetesPage() {
 
   const loadRuntime = async () => {
     try {
-      const r = (await invoke("k8s_get_runtime")) as { runtime?: string };
+      const r = await daemonGet<{ runtime?: string }>("/k8s/runtime");
       if (r?.runtime) setK8sRuntime(r.runtime);
     } catch {
       // non-fatal: fall back to the "docker" default
@@ -577,12 +578,12 @@ export default function KubernetesPage() {
     setStopping(true);
     showToast(t("Stopping Kubernetes cluster..."), "info");
     try {
-      await invoke("k8s_disable");
+      await daemonPost("/k8s/disable");
       showToast(t("Kubernetes cluster stopped"), "success");
       await refreshStatus();
     } catch (e) {
       logError(`Failed to stop Kubernetes: ${e}`);
-      showToast(t("Failed to stop: {error}", { error: String(e) }), "error");
+      showToast(t("Failed to stop: {error}", { error: daemonErrorMessage(e) }), "error");
     }
     setStopping(false);
   };
@@ -590,12 +591,12 @@ export default function KubernetesPage() {
   const handleStart = async () => {
     try {
       setEnabling(true);
-      await invoke("k8s_start");
+      await daemonPost("/k8s/start");
       showToast(t("Kubernetes cluster started"), "success");
       await refreshStatus();
     } catch (e) {
       logError(`Failed to start Kubernetes: ${e}`);
-      showToast(t("Failed to start: {error}", { error: String(e) }), "error");
+      showToast(t("Failed to start: {error}", { error: daemonErrorMessage(e) }), "error");
     } finally {
       setEnabling(false);
     }
@@ -604,7 +605,7 @@ export default function KubernetesPage() {
   const handleReset = async () => {
     if (!await confirmDanger(t("Reset Kubernetes"), t("This will uninstall k3s and delete ALL workloads, data, and configuration. A fresh k3s will be reinstalled."))) return;
     try {
-      await invoke("k8s_reset");
+      await daemonPost("/k8s/reset");
       showToast(t("Kubernetes cluster reset"), "success");
       await refreshStatus();
     } catch (e) {

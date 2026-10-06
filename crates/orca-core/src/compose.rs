@@ -137,6 +137,11 @@ mod tests {
     use std::collections::HashMap;
 
     /// Helper: build a Container with compose labels.
+    ///
+    /// Eight positional params is deliberate for a test fixture: at the 6 call
+    /// sites the positional form reads better than a struct literal, and most
+    /// of the `Option` params are `None`.
+    #[allow(clippy::too_many_arguments)]
     fn make_container(
         id: &str,
         name: &str,

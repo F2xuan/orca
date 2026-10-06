@@ -1,8 +1,10 @@
-import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
+import { createSignal, createEffect, onMount, onCleanup, Show, For } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonGet } from "../lib/daemonClient";
 import type { Container, ContainerStats } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
+import { useContainers } from "../lib/pollStore";
 import { formatBytes, formatTimestamp } from "../lib/format";
 import { showToast } from "../components/Toast";
 import { confirmDanger } from "../components/ConfirmDialog";
@@ -81,13 +83,22 @@ export default function ContainerDetailPage(props: ContainerDetailPageProps) {
 
   let statsInterval: ReturnType<typeof setInterval> | undefined;
 
+  // Polled, and shared: any other page reading the container list now gets the
+  // same snapshot instead of issuing its own request.
+  const containersPoll = useContainers(3_000);
+
+  /** Read straight out of the poll, so it is already correct right after a
+   *  refresh resolves — an effect only catches up on the following tick. */
+  const currentContainer = () =>
+    (containersPoll.data() as Container[] | undefined)?.find((x) => x.id === props.containerId);
+
+  createEffect(() => {
+    const c = currentContainer();
+    if (c) setContainer(c);
+  });
+
   const fetchContainer = async () => {
-    try {
-      const containers = (await invoke("list_containers")) as Container[];
-      const c = containers.find((x) => x.id === props.containerId);
-      if (c) setContainer(c);
-    } catch {
-    }
+    await containersPoll.refresh();
   };
 
   useRefresh(fetchContainer);
@@ -111,7 +122,7 @@ export default function ContainerDetailPage(props: ContainerDetailPageProps) {
 
   const fetchInspect = async () => {
     try {
-      const data = await invoke("inspect_container", { id: props.containerId });
+      const data = await daemonGet(`/containers/${encodeURIComponent(props.containerId)}`);
       setInspectData(data);
     } catch {
       // May fail
@@ -151,14 +162,14 @@ export default function ContainerDetailPage(props: ContainerDetailPageProps) {
       if (disposed) return;
       setLoading(false);
 
-      if (container()?.state === "Running") {
+      if (currentContainer()?.state === "Running") {
         startStatsRefresh();
       }
 
       interval = setInterval(async () => {
         if (disposed) return;
         await fetchContainer();
-        const cur = container();
+        const cur = currentContainer();
         if (cur?.state === "Running" && !statsInterval) {
           startStatsRefresh();
         } else if (cur?.state !== "Running" && statsInterval) {
@@ -270,7 +281,9 @@ export default function ContainerDetailPage(props: ContainerDetailPageProps) {
     const current = fileBrowserPath();
     const fullPath = current === "/" ? `/${filePath}` : `${current}/${filePath}`;
     try {
-      const result = (await invoke("container_read_file", { id: props.containerId, path: fullPath })) as { content: string };
+      const result = await daemonGet<{ content: string }>(
+        `/containers/${encodeURIComponent(props.containerId)}/file?path=${encodeURIComponent(fullPath)}`,
+      );
       setFileContent(result.content);
       setFileContentPath(filePath);
     } catch (e) {
@@ -354,14 +367,14 @@ export default function ContainerDetailPage(props: ContainerDetailPageProps) {
     // preview reflect the user's real setup (matches how GatewayPage
     // handleAddRoute / handleSaveEdit resolve the domain).
     try {
-      const s = (await invoke("gateway_status")) as { domain?: string } | null;
+      const s = await daemonGet<{ domain?: string } | null>("/gateway/status");
       setExposeDomain(s?.domain || "localhost");
     } catch {
       setExposeDomain("localhost");
     }
     // Check if route already exists
     try {
-      const routes = (await invoke("gateway_list_routes")) as Array<{ hostname: string; container_name: string; url: string }>;
+      const routes = await daemonGet<Array<{ hostname: string; container_name: string; url: string }>>("/gateway/routes");
       const existing = routes.find((r) => r.container_name === c.name);
       if (existing) {
         setExistingRoute({ hostname: existing.hostname, url: existing.url });

@@ -79,6 +79,17 @@ pub enum EventKind {
     /// Forward-compat catch-all for events emitted by newer daemons that
     /// older clients don't recognize. Keeps deserialization non-fatal
     /// across version skew.
+    // Alert events
+    /// An alert opened, escalated, or resolved.
+    ///
+    /// Carries the authoritative open count and nothing else. The bell's badge
+    /// needs a number to light up; the detail list already has a source
+    /// (`GET /alerts`), so putting a second serialisation of `Alert` on this
+    /// wire would only be one more thing to keep in sync.
+    AlertChanged {
+        open_count: usize,
+    },
+
     #[serde(other)]
     Unknown,
 }
@@ -86,6 +97,63 @@ pub enum EventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The GUI reads `kind.type` and `kind.data`, so an alert event has to
+    /// arrive in exactly that shape or the badge silently never updates.
+    #[test]
+    fn an_alert_event_carries_the_open_count_in_the_data_field() {
+        let event = Event {
+            timestamp: "2026-01-01T00:00:00+00:00".into(),
+            kind: EventKind::AlertChanged { open_count: 3 },
+        };
+        let value = serde_json::to_value(&event).expect("serialises");
+        assert_eq!(value["kind"]["type"], "AlertChanged");
+        assert_eq!(value["kind"]["data"]["open_count"], 3);
+        assert_eq!(value["timestamp"], "2026-01-01T00:00:00+00:00");
+
+        let back: Event = serde_json::from_value(value).expect("round trips");
+        match back.kind {
+            EventKind::AlertChanged { open_count } => assert_eq!(open_count, 3),
+            other => panic!("expected an alert event, got {other:?}"),
+        }
+    }
+
+    /// A variant this build does not know must not fail the whole stream.
+    ///
+    /// Only the **unit** shape is covered. `#[serde(other)]` cannot capture the
+    /// `data` field under adjacent tagging, so an unknown variant *carrying a
+    /// payload* fails to decode rather than becoming `Unknown` — the annotation
+    /// reads like forward compatibility but is narrower than it looks.
+    ///
+    /// This is currently inert: nothing deserialises an `Event`. The Docker
+    /// listener only constructs them, the SSE stream only serialises, and the
+    /// GUI bridge passes untyped JSON through. It would bite the first consumer
+    /// that decodes events from a *newer* daemon. The two real fixes are to tag
+    /// internally (`tag = "type"` with the fields inline) — a wire change that
+    /// would break `kind.data` for every existing event — or to hand-write a
+    /// `Deserialize` over a shadow enum. Both are recorded in the triage report
+    /// §21 rather than chosen here.
+    #[test]
+    fn an_unknown_event_decodes_only_without_a_payload() {
+        let unit_shaped = serde_json::json!({
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "kind": { "type": "SomethingFromTheFuture" }
+        });
+        let event: Event = serde_json::from_value(unit_shaped).expect("decodes");
+        assert!(matches!(event.kind, EventKind::Unknown));
+
+        // The limitation, pinned by a test so it cannot be mistaken for working
+        // forward compatibility. If this assertion starts failing, `Unknown` has
+        // gained payload capture and the note above is out of date.
+        let with_payload = serde_json::json!({
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "kind": { "type": "SomethingFromTheFuture", "data": { "x": 1 } }
+        });
+        assert!(
+            serde_json::from_value::<Event>(with_payload).is_err(),
+            "an unknown payload-carrying variant does not decode today"
+        );
+    }
 
     #[test]
     fn event_kind_serializes_as_tagged_enum() {

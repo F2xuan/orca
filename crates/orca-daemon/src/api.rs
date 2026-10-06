@@ -13,7 +13,7 @@ use axum::{
     Json, Router,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Path, Query, Request, State},
-    http::StatusCode,
+    http::{HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::{
         IntoResponse,
@@ -22,17 +22,23 @@ use axum::{
     routing::{delete, get, patch, post, put},
 };
 use futures::{SinkExt, StreamExt as FuturesStreamExt};
+use orca_core::agent_tools::ToolRisk;
 use orca_core::compose::{self, ComposeRunner};
 use orca_core::image::ImageManager;
 use orca_core::kubernetes::K8sManager;
 use orca_core::machine::{MachineBackend, MachineConfig, MachineInfo, MachineState};
 use orca_core::network::NetworkManager;
+use orca_core::alert::{Alert, AlertsResponse};
+use orca_core::operation::{OperationActor, OperationKind, OperationRecord, OperationsResponse};
+use orca_core::registry::{UpdateCheck, parse_reference};
 use orca_core::runtime::{ContainerRuntime, ContainerStats};
 use orca_core::templates::{AppTemplate, PASSWORD_PLACEHOLDER};
 use orca_core::volume::VolumeManager;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
+use crate::operations;
 use crate::state::AppState;
 
 /// Serializes CA-on-first-boot initialization so two concurrent
@@ -62,6 +68,64 @@ fn build_tasks() -> &'static tokio::sync::Mutex<HashMap<String, tokio::task::Joi
     BUILD_TASKS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
+/// Machine-readable failure categories.
+///
+/// Before this existed the body was only `{ "error": "<free text>" }`, so a
+/// caller could tell "not found" from "already running" only by
+/// substring-matching the message. That is not a hypothetical problem: it is
+/// why several call sites gave up and treated *any* failure as success (they
+/// had no reliable way to ask "was this the benign case?").
+///
+/// `code` is the field callers may branch on and is expected to be stable.
+/// `error` stays human-readable and may be reworded at any time — never branch
+/// on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ErrorCode {
+    /// Malformed request or failed validation.
+    InvalidInput,
+    /// The addressed resource does not exist.
+    NotFound,
+    /// The operation exceeded its time budget.
+    Timeout,
+    /// A child command exited non-zero.
+    CommandFailed,
+    /// Anything not covered above.
+    Internal,
+}
+
+impl ErrorCode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidInput => "invalid_input",
+            Self::NotFound => "not_found",
+            Self::Timeout => "timeout",
+            Self::CommandFailed => "command_failed",
+            Self::Internal => "internal",
+        }
+    }
+
+    /// The HTTP status a code maps to. Keeping the mapping here (rather than at
+    /// each call site) means a handler cannot accidentally pair, say, a
+    /// `not_found` code with a 500 status.
+    ///
+    /// Deliberately absent for now: `conflict` / `in_use` /
+    /// `engine_unavailable` / `unauthorized` / `forbidden`. Every one of those
+    /// needs a *classification* step that does not exist yet — a bollard error
+    /// has to be inspected to decide whether it means "no such container" or
+    /// "engine down", and the WS handlers build their own `StatusCode`
+    /// responses. Adding the variants before the classifiers would ship codes
+    /// nothing can emit, so they land together with the classifier.
+    fn status(self) -> StatusCode {
+        match self {
+            Self::InvalidInput => StatusCode::BAD_REQUEST,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Timeout => StatusCode::GATEWAY_TIMEOUT,
+            Self::CommandFailed | Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
 /// Simple API error that maps anyhow errors to JSON 500 responses by
 /// default, or to an explicit status code when constructed via a helper
 /// such as [`ApiError::bad_request`].
@@ -72,6 +136,7 @@ fn build_tasks() -> &'static tokio::sync::Mutex<HashMap<String, tokio::task::Joi
 /// code should use the helper constructors instead.
 struct ApiError {
     status: StatusCode,
+    code: ErrorCode,
     err: anyhow::Error,
 }
 
@@ -79,16 +144,37 @@ struct ApiError {
 fn ApiError(err: anyhow::Error) -> ApiError {
     ApiError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
+        code: ErrorCode::Internal,
         err,
     }
 }
 
 impl ApiError {
-    fn bad_request(msg: impl Into<String>) -> Self {
+    fn new(code: ErrorCode, err: anyhow::Error) -> Self {
         Self {
-            status: StatusCode::BAD_REQUEST,
-            err: anyhow::anyhow!(msg.into()),
+            status: code.status(),
+            code,
+            err,
         }
+    }
+
+    fn bad_request(msg: impl Into<String>) -> Self {
+        Self::new(ErrorCode::InvalidInput, anyhow::anyhow!(msg.into()))
+    }
+
+    fn not_found(msg: impl Into<String>) -> Self {
+        Self::new(ErrorCode::NotFound, anyhow::anyhow!(msg.into()))
+    }
+
+    /// Run a child command and turn a failure into an error carrying its last
+    /// stderr line, tagged so the client can tell it apart from a daemon bug.
+    fn command_failed(what: &str, out: &orca_core::proc::CommandOutput) -> Self {
+        let detail = if out.timed_out {
+            format!("{what} timed out")
+        } else {
+            format!("{what} failed (exit {}): {}", out.exit_code, out.last_stderr_line())
+        };
+        Self::new(ErrorCode::CommandFailed, anyhow::anyhow!(detail))
     }
 }
 
@@ -97,11 +183,34 @@ impl IntoResponse for ApiError {
         #[derive(Serialize)]
         struct ErrorBody {
             error: String,
+            code: &'static str,
+        }
+        // The full `anyhow` chain goes to the daemon log, NOT to the client.
+        // The chain's inner causes routinely embed raw child-process stderr
+        // (a failed `git clone` echoes the URL, which may carry a token). The
+        // log file is deliberately the one place the full cause list is kept —
+        // it is what makes a failure diagnosable — while the client gets the
+        // outermost message, scrubbed.
+        let chain = self
+            .err
+            .chain()
+            .map(|cause| cause.to_string())
+            .collect::<Vec<_>>();
+        if self.status.is_server_error() {
+            tracing::error!(code = self.code.as_str(), chain = ?chain, "request failed");
+        } else {
+            tracing::debug!(code = self.code.as_str(), chain = ?chain, "request rejected");
         }
         (
             self.status,
             Json(ErrorBody {
-                error: self.err.to_string(),
+                // Every error body leaves through the egress scrubber: URL
+                // userinfo is blanked by shape, and any secret value the daemon
+                // knows about is replaced wherever it appears. This is the
+                // single choke point for error text, so a handler that formats
+                // a raw `stderr` into its message cannot leak by forgetting.
+                error: orca_core::redact::redact_for_egress(&self.err.to_string()),
+                code: self.code.as_str(),
             }),
         )
             .into_response()
@@ -112,6 +221,7 @@ impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: ErrorCode::Internal,
             err,
         }
     }
@@ -207,6 +317,48 @@ pub async fn auth_middleware(
     Ok(response)
 }
 
+/// CORS for the desktop webview.
+///
+/// The GUI reaches this daemon two ways. In `npm run dev` a Vite proxy forwards
+/// `/api/v1/*`, but a *packaged* app has no proxy — `gui/src/lib/daemonClient.ts`
+/// calls `http://127.0.0.1:9477` straight from the webview. That makes every call
+/// cross-origin, and a `fetch` carrying an `Authorization` header is not a
+/// "simple" request, so the browser sends an `OPTIONS` preflight first. A
+/// preflight never carries credentials (by spec), so it has to be answered
+/// *before* `auth_middleware` — that is why `main.rs` applies this layer outside
+/// it, and why answering 401 to a preflight silently breaks every page at once.
+///
+/// Deliberately not a wildcard: only the app's own origins are listed. The daemon
+/// is loopback-only, but loopback is exactly what a browser can reach on the
+/// user's behalf, so a wildcard would expose the API to any page they visit.
+pub fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list([
+            // The Tauri webview's own origin: macOS and Linux send
+            // `tauri://localhost`, Windows and Android send
+            // `http://tauri.localhost`. Allowing only the `http://` form is a
+            // known way to break packaging — see
+            // <https://github.com/gptme/gptme/issues/2226>.
+            HeaderValue::from_static("tauri://localhost"),
+            HeaderValue::from_static("http://tauri.localhost"),
+            HeaderValue::from_static("https://tauri.localhost"),
+            // `npm run dev` (tauri.conf.json `devUrl`). Listed even though the
+            // Vite proxy normally covers dev, because the client builds absolute
+            // URLs and so does not go through that proxy.
+            HeaderValue::from_static("http://localhost:5173"),
+            HeaderValue::from_static("http://127.0.0.1:5173"),
+        ]))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
+        .max_age(Duration::from_secs(600))
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health))
@@ -238,6 +390,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/registries/{server}", delete(remove_registry_handler))
         // Images
         .route("/images", get(list_images))
+        // Registered after `/images/{id}` on purpose, to be explicit that the
+        // static segment is what makes this route win: axum prefers a literal
+        // match over a parameter, so `updates` is never treated as an image id.
+        .route("/images/updates", get(check_image_updates))
         .route("/images/{id}", get(inspect_image))
         .route("/images/{id}", delete(remove_image))
         .route("/images/pull", post(pull_image))
@@ -258,6 +414,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/builds/stats", get(build_stats))
         .route("/builds/compare", post(compare_builds))
         .route("/builds/targets", get(list_build_targets))
+        .route("/operations", get(list_operations))
+        .route("/alerts", get(list_alerts))
+        .route("/alerts/{id}/resolve", post(resolve_alert))
         .route("/builds/targets/{name}", post(start_build_from_target))
         .route("/builds/{id}", get(get_build).delete(delete_build_endpoint))
         .route("/builds/{id}/logs", get(get_build_logs))
@@ -524,6 +683,7 @@ fn event_type_name(kind: &orca_core::event::EventKind) -> &'static str {
         VolumeRemoved { .. } => "volume.removed",
         BuildStarted { .. } => "build.started",
         BuildCompleted { .. } => "build.completed",
+        AlertChanged { .. } => "alert.changed",
         Unknown => "unknown",
     }
 }
@@ -573,8 +733,97 @@ fn native_machine_info() -> MachineInfo {
 // --- Containers ---
 
 async fn list_containers(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
-    let containers = state.rt().await.list_containers(true).await?;
-    Ok(Json(containers))
+    // Six GUI surfaces ask for this list and the sidebar polls it every five
+    // seconds, so the daemon collapses concurrent demand into one Docker call
+    // per TTL. See `crate::cache`.
+    let snapshot = state
+        .containers
+        .get_or_refresh(|| async {
+            state
+                .rt()
+                .await
+                .list_containers(true)
+                .await
+                // Formatted with the chain (`{:#}`): the snapshot stores text,
+                // and the cause is worth keeping even though §2.1 keeps it out
+                // of the response body.
+                .map_err(|e| format!("{e:#}"))
+        })
+        .await;
+
+    match snapshot.data {
+        Some(containers) => Ok(Json((*containers).clone())),
+        None => Err(cache_unavailable(snapshot.err.as_deref(), "the container list")),
+    }
+}
+
+/// Turn a cache's recorded failure into an error response.
+///
+/// The snapshot holds text rather than a typed error, so the cause chain
+/// survives as the message and the redactor scrubs it on the way out.
+fn cache_unavailable(err: Option<&str>, what: &str) -> ApiError {
+    ApiError::new(
+        ErrorCode::Internal,
+        anyhow::anyhow!("{}", err.unwrap_or(what)),
+    )
+}
+
+/// Which cached lists a completed request invalidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Invalidated {
+    containers: bool,
+    images: bool,
+}
+
+/// Whether a path has `segment` as a whole path component.
+///
+/// Segment matching rather than `contains`: `contains` would also fire for a
+/// hypothetical `/containers-archive`, and a cache dropped for an unrelated
+/// route is a silent performance regression nobody would trace back here.
+fn touches(path: &str, segment: &str) -> bool {
+    path.split('/').any(|part| part == segment)
+}
+
+/// Decide what a completed request invalidates.
+///
+/// Split out from the middleware so the rule is testable without building a
+/// router: the middleware's only remaining job is to read the request, await the
+/// response, and act on this.
+fn invalidated_by(method: &axum::http::Method, path: &str, status: StatusCode) -> Invalidated {
+    // Only a *successful mutation* invalidates. A GET changed nothing, and a
+    // failed create changed nothing either — dropping the entry in that case
+    // would throw away good data only to re-fetch the same value.
+    let relevant = *method != axum::http::Method::GET && status.is_success();
+    Invalidated {
+        containers: relevant && touches(path, "containers"),
+        images: relevant && touches(path, "images"),
+    }
+}
+
+/// Drop cached list entries after any request that could have changed them.
+///
+/// A middleware rather than a call inside each handler. There are sixteen
+/// mutating container and image routes, and a missed call is *invisible* — the
+/// list is merely stale for one TTL — so it is exactly the kind of thing that
+/// rots. Keyed off the path, a route added later is covered without anyone
+/// having to remember.
+pub async fn invalidate_caches(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let response = next.run(req).await;
+
+    let invalidated = invalidated_by(&method, &path, response.status());
+    if invalidated.containers {
+        state.containers.invalidate();
+    }
+    if invalidated.images {
+        state.images.invalidate();
+    }
+    response
 }
 
 async fn inspect_container(
@@ -895,7 +1144,7 @@ async fn handle_terminal(socket: WebSocket, state: Arc<AppState>, container_id: 
             let (mut ws_sender, mut ws_receiver) = socket.split();
 
             // Container stdout/stderr -> WebSocket
-            let output_task = tokio::spawn(async move {
+            let mut output_task = tokio::spawn(async move {
                 use futures::stream::StreamExt;
                 while let Some(Ok(log_output)) = output.next().await {
                     let bytes = log_output.into_bytes();
@@ -908,7 +1157,7 @@ async fn handle_terminal(socket: WebSocket, state: Arc<AppState>, container_id: 
             // WebSocket input -> Container stdin (+ resize handling)
             let exec_id_for_input = exec.id.clone();
             let docker = state.rt().await.docker.clone();
-            let input_task = tokio::spawn(async move {
+            let mut input_task = tokio::spawn(async move {
                 while let Some(Ok(msg)) = ws_receiver.next().await {
                     match msg {
                         Message::Text(text) => {
@@ -945,10 +1194,18 @@ async fn handle_terminal(socket: WebSocket, state: Arc<AppState>, container_id: 
                 }
             });
 
-            // Wait for either task to complete
+            // Wait for either task to complete, then *abort* the other.
+            //
+            // Awaiting the handles by `&mut` and aborting explicitly matters:
+            // `select!` only drops the losing future, and dropping a
+            // `JoinHandle` does **not** cancel its task. The previous version
+            // therefore left half of the terminal running — after the client
+            // disconnected, the stdin pump kept holding the exec stream, and
+            // after the container exited the output pump stayed parked on a
+            // dead stream — until the exec was torn down by something else.
             tokio::select! {
-                _ = output_task => {}
-                _ = input_task => {}
+                _ = &mut output_task => { input_task.abort(); }
+                _ = &mut input_task => { output_task.abort(); }
             }
         }
         Ok(StartExecResults::Detached) => {
@@ -1017,8 +1274,124 @@ async fn container_logs_sse(
 // --- Images ---
 
 async fn list_images(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
+    // Same reasoning as `list_containers`; the sidebar polls this one too.
+    let snapshot = state
+        .images
+        .get_or_refresh(|| async {
+            ImageManager::list(state.rt().await.as_ref())
+                .await
+                .map_err(|e| format!("{e:#}"))
+        })
+        .await;
+
+    match snapshot.data {
+        Some(images) => Ok(Json((*images).clone())),
+        None => Err(cache_unavailable(snapshot.err.as_deref(), "the image list")),
+    }
+}
+
+/// One image tag's update verdict.
+#[derive(Serialize)]
+struct ImageUpdate {
+    /// The local tag this describes, e.g. `alpine:3.20`.
+    image: String,
+    /// Local image id, so a client can act on the right image.
+    id: String,
+    #[serde(flatten)]
+    check: UpdateCheck,
+}
+
+/// Check every local image tag against its registry.
+///
+/// Deliberately on demand, not polled. An unprompted poller would hammer
+/// registries for every user whether or not they care, and Docker Hub
+/// rate-limits anonymous requests by IP — so the cost of a background poll
+/// lands on the user's *other* tooling.
+///
+/// Results are tri-state per tag (`up_to_date` / `update_available` /
+/// `unknown`) because "I could not reach the registry" must never be rendered as
+/// "you are up to date".
+async fn check_image_updates(
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, ApiError> {
     let images = ImageManager::list(state.rt().await.as_ref()).await?;
-    Ok(Json(images))
+    // Snapshot credentials and release the lock before doing any network I/O.
+    let credentials = state.config.lock().await.registries.clone();
+    // Borrow once, outside the stream. The `map` closure is `FnMut` and runs per
+    // reference, so an `async move` block that captured the `Vec` itself would
+    // try to move it out on every call; a shared slice is `Copy`, so moving the
+    // *reference* in is fine.
+    let credentials = credentials.as_slice();
+
+    // Distinct manifests to ask about. Several tags of the same repository are
+    // genuinely distinct manifests, but the same tag on two image ids is not
+    // worth asking twice.
+    let mut references: Vec<orca_core::registry::ImageReference> = Vec::new();
+    for image in &images {
+        for tag in &image.repo_tags {
+            // `<none>:<none>` is Docker's marker for an untagged image.
+            if tag.starts_with("<none>") {
+                continue;
+            }
+            let reference = parse_reference(tag);
+            if !references.contains(&reference) {
+                references.push(reference);
+            }
+        }
+    }
+
+    // Bounded concurrency: a user with fifty images should not open fifty
+    // simultaneous connections.
+    let fetched: Vec<(String, Result<String, String>)> =
+        futures::stream::iter(references.iter().cloned())
+            // Cloned into the async block rather than borrowed: a closure that
+            // returns a future borrowing its argument does not satisfy the
+            // higher-ranked bound `buffer_unordered` requires.
+            .map(|reference| async move {
+                let key = crate::registry::reference_key(&reference);
+                let result = crate::registry::remote_digest(&reference, credentials)
+                    .await
+                    // `{:#}` keeps the cause chain, which is what distinguishes
+                    // "offline" from "private, no credentials".
+                    .map_err(|e| format!("{e:#}"));
+                (key, result)
+            })
+            .buffer_unordered(4)
+            .collect()
+            .await;
+    let by_reference: HashMap<String, Result<String, String>> = fetched.into_iter().collect();
+
+    let mut updates: Vec<ImageUpdate> = Vec::new();
+    for image in &images {
+        for tag in &image.repo_tags {
+            if tag.starts_with("<none>") {
+                continue;
+            }
+            let reference = parse_reference(tag);
+            let check = crate::registry::resolve(
+                &reference,
+                &image.repo_digests,
+                by_reference.get(&crate::registry::reference_key(&reference)),
+            );
+            updates.push(ImageUpdate {
+                image: tag.clone(),
+                id: image.id.clone(),
+                check,
+            });
+        }
+    }
+
+    // Most actionable first, so a client can show the top of the list without
+    // re-sorting.
+    updates.sort_by_key(|update| !update.check.is_update_available());
+
+    Ok(Json(serde_json::json!({
+        // Distinct manifests actually asked about, which is not the number of
+        // rows: tags that could not be compared never hit the network.
+        "checked": references.len(),
+        "count": updates.len(),
+        "updates": updates,
+    })))
 }
 
 async fn inspect_image(
@@ -1396,7 +1769,7 @@ async fn get_build(Path(id): Path<String>) -> Result<impl IntoResponse, ApiError
     let record = history
         .into_iter()
         .find(|r| r.id == id)
-        .ok_or_else(|| ApiError(anyhow::anyhow!("Build {id} not found")))?;
+        .ok_or_else(|| ApiError::not_found(format!("Build {id} not found")))?;
     let cache = crate::build_manager::analyze_cache(&record.id);
     let mut value = serde_json::to_value(&record).unwrap_or_default();
     if let (Some(cache), Some(obj)) = (cache, value.as_object_mut()) {
@@ -1775,12 +2148,12 @@ async fn compare_builds(Json(req): Json<CompareBuildsRequest>) -> Result<impl In
     let build1 = history
         .iter()
         .find(|r| r.id == req.id1)
-        .ok_or_else(|| ApiError(anyhow::anyhow!("Build {} not found", req.id1)))?
+        .ok_or_else(|| ApiError::not_found(format!("Build {} not found", req.id1)))?
         .clone();
     let build2 = history
         .iter()
         .find(|r| r.id == req.id2)
-        .ok_or_else(|| ApiError(anyhow::anyhow!("Build {} not found", req.id2)))?
+        .ok_or_else(|| ApiError::not_found(format!("Build {} not found", req.id2)))?
         .clone();
 
     // Diff build args
@@ -1810,7 +2183,20 @@ async fn compare_builds(Json(req): Json<CompareBuildsRequest>) -> Result<impl In
 }
 
 async fn prune_images(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
-    let result = ImageManager::prune(state.rt().await.as_ref()).await?;
+    // Pruning is destructive and can take a while, so it is recorded: the
+    // operation log is what lets a user see afterwards that a prune ran and
+    // whether it actually succeeded, rather than trusting a toast.
+    let result = operations::run(
+        OperationKind::PruneImages,
+        "unused and dangling images",
+        OperationActor::User,
+        {
+            let state = state.clone();
+            async move { ImageManager::prune(state.rt().await.as_ref()).await }
+        },
+        operations::always_ok,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -3395,12 +3781,43 @@ async fn resolve_stack_dir(state: &AppState, name: &str) -> Result<(String, Opti
     Ok((working_dir, stack.config_file))
 }
 
+/// Classify a compose result for the operation log.
+///
+/// `docker compose` reports failure *inside* a successful return — `Ok` with
+/// `success == false`. Recording that as a success would make the history
+/// actively misleading, so the exit status is turned into the recorded error.
+fn compose_outcome(what: &'static str) -> impl Fn(&compose::ComposeOutput) -> Option<String> {
+    move |output: &compose::ComposeOutput| {
+        (!output.success).then(|| {
+            let detail = output
+                .stderr
+                .lines()
+                .rfind(|line| !line.trim().is_empty())
+                .unwrap_or("(no output)");
+            format!("{what} exited {}: {detail}", output.exit_code)
+        })
+    }
+}
+
 async fn compose_up(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (dir, config) = resolve_stack_dir(&state, &name).await?;
-    let output = state.rt().await.compose_up(&dir, config.as_deref()).await?;
+    // Recorded as an operation so the result outlives this request: a reload or
+    // a closed tab no longer loses the outcome, and `GET /operations` can report
+    // it afterwards.
+    let output = operations::run(
+        OperationKind::ComposeUp,
+        &name,
+        OperationActor::User,
+        {
+            let state = state.clone();
+            async move { state.rt().await.compose_up(&dir, config.as_deref()).await }
+        },
+        compose_outcome("compose up"),
+    )
+    .await?;
     Ok(Json(output))
 }
 
@@ -3508,7 +3925,17 @@ async fn compose_down(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let (dir, config) = resolve_stack_dir(&state, &name).await?;
-    let output = state.rt().await.compose_down(&dir, config.as_deref()).await?;
+    let output = operations::run(
+        OperationKind::ComposeDown,
+        &name,
+        OperationActor::User,
+        {
+            let state = state.clone();
+            async move { state.rt().await.compose_down(&dir, config.as_deref()).await }
+        },
+        compose_outcome("compose down"),
+    )
+    .await?;
     Ok(Json(output))
 }
 
@@ -4274,7 +4701,7 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
 
     // Stdout -> channel
     let tx_stdout = tx.clone();
-    let stdout_task = tokio::spawn(async move {
+    let mut stdout_task = tokio::spawn(async move {
         let mut buf = [0u8; 4096];
         loop {
             match stdout.read(&mut buf).await {
@@ -4291,7 +4718,7 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
 
     // Stderr -> channel
     let tx_stderr = tx.clone();
-    let stderr_task = tokio::spawn(async move {
+    let mut stderr_task = tokio::spawn(async move {
         let mut buf = [0u8; 4096];
         loop {
             match stderr.read(&mut buf).await {
@@ -4307,7 +4734,7 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
     });
 
     // Channel -> WebSocket
-    let output_task = tokio::spawn(async move {
+    let mut output_task = tokio::spawn(async move {
         while let Some(data) = rx.recv().await {
             if ws_sender.send(Message::Binary(data.into())).await.is_err() {
                 break;
@@ -4316,7 +4743,7 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
     });
 
     // WebSocket -> stdin
-    let input_task = tokio::spawn(async move {
+    let mut input_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_receiver.next().await {
             match msg {
                 Message::Text(text) => {
@@ -4344,16 +4771,37 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
     });
 
     tokio::select! {
-        _ = output_task => {}
-        _ = input_task => {}
-        _ = stdout_task => {}
-        _ = stderr_task => {}
+        _ = &mut output_task => {}
+        _ = &mut input_task => {}
+        _ = &mut stdout_task => {}
+        _ = &mut stderr_task => {}
         _ = child.wait() => {}
     }
 
-    // Whichever branch fired the select first, any others might still be
-    // alive — explicitly ask the child to exit before it drops. `start_kill`
-    // is a no-op if the process has already exited.
+    // Whichever branch fired the select first, the others are still alive:
+    // dropping a `JoinHandle` does not cancel its task, and the previous
+    // version relied on that drop to stop them. Two consequences, both real:
+    //
+    // * the WS pumps (and the `kubectl exec` pipes they hold) outlived this
+    //   handler — the comment below already acknowledged it for the child,
+    //   but not for the tasks;
+    // * a sibling pipe often still holds the last lines of output, so killing
+    //   the output path outright would truncate the tail of the terminal.
+    //
+    // So: stop reading the socket immediately (nobody is waiting on the result
+    // any more), let the output path flush under a short grace period, then
+    // abort whatever is left.
+    input_task.abort();
+    let _ = tokio::time::timeout(Duration::from_millis(500), async {
+        let _ = tokio::join!(&mut stdout_task, &mut stderr_task, &mut output_task);
+    })
+    .await;
+    stdout_task.abort();
+    stderr_task.abort();
+    output_task.abort();
+
+    // Explicitly ask the child to exit before it drops. `start_kill` is a
+    // no-op if the process has already exited.
     let _ = child.start_kill();
 }
 
@@ -4669,7 +5117,10 @@ async fn delete_user_template(Query(params): Query<DeleteTemplateParams>) -> Res
     let before = user_templates.len();
     user_templates.retain(|t| t.id != params.id);
     if user_templates.len() == before {
-        return Err(anyhow::anyhow!("User template '{}' not found", params.id).into());
+        return Err(ApiError::not_found(format!(
+            "User template '{}' not found",
+            params.id
+        )));
     }
     orca_backend_common::templates::save_user_templates(&user_templates).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -4898,6 +5349,104 @@ fn scan_all_build_targets() -> Vec<orca_core::build::BuildTarget> {
 async fn list_build_targets() -> Result<impl IntoResponse, ApiError> {
     let targets = scan_all_build_targets();
     Ok(Json(targets))
+}
+
+// --- Operation history ---
+
+#[derive(Deserialize)]
+struct OperationsQuery {
+    /// Only operations that have not reached a terminal state. This is the
+    /// "what is happening right now" query, and the one a client polling for
+    /// progress needs.
+    #[serde(default)]
+    active: Option<bool>,
+    /// Cap the number returned, newest first.
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// Long-running operation history, newest first.
+///
+/// This endpoint is what makes a background operation survivable: the record is
+/// written before the work starts and closed when it ends, so a client that
+/// reloaded, or lost its connection, can still find out what happened — instead
+/// of the outcome existing only in a toast that has already been dismissed.
+async fn list_operations(
+    Query(query): Query<OperationsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut records = operations::list().await;
+    if query.active.unwrap_or(false) {
+        records.retain(|record| !record.status.is_terminal());
+    }
+    if let Some(limit) = query.limit {
+        records.truncate(limit);
+    }
+    Ok(Json(operations_envelope(records)))
+}
+
+/// The `/operations` response body, split out for the same reason as
+/// [`alerts_envelope`].
+fn operations_envelope(records: Vec<OperationRecord>) -> OperationsResponse {
+    // `count` alongside the array so a client can render "showing 20 of 137"
+    // without having to know the daemon's retention cap.
+    OperationsResponse {
+        count: records.len(),
+        operations: records,
+    }
+}
+
+// --- Alerts ---
+
+#[derive(Deserialize)]
+struct AlertsQuery {
+    /// Only alerts that are still open.
+    #[serde(default)]
+    open: Option<bool>,
+}
+
+/// The alert log, newest first.
+///
+/// `open_count` is returned regardless of the filter so a badge never needs a
+/// second request to stay correct.
+async fn list_alerts(Query(query): Query<AlertsQuery>) -> Result<impl IntoResponse, ApiError> {
+    let alerts = if query.open.unwrap_or(false) {
+        crate::alerts::open_alerts()
+    } else {
+        crate::alerts::list()
+    };
+    Ok(Json(alerts_envelope(alerts)))
+}
+
+/// The `/alerts` response body, split out so its shape can be asserted.
+///
+/// `gui/src/lib/types.ts` declares `AlertsResponse` for this by hand — see §18
+/// of komodo-borrowings-triage.md — so the key names are a contract, and the
+/// test below is what stops them drifting apart silently.
+fn alerts_envelope(alerts: Vec<Alert>) -> AlertsResponse {
+    // Counted from the same list being returned rather than by re-reading the
+    // log, so `open_count` can never disagree with the rows the client holds.
+    let open_count = alerts.iter().filter(|alert| alert.is_open()).count();
+    AlertsResponse {
+        count: alerts.len(),
+        open_count,
+        alerts,
+    }
+}
+
+/// Dismiss an open alert.
+///
+/// Appends the resolved state; the row recording that it fired stays in the log,
+/// so dismissing is auditable rather than a deletion.
+async fn resolve_alert(Path(id): Path<String>) -> Result<impl IntoResponse, ApiError> {
+    if crate::alerts::resolve(&id) {
+        Ok(Json(serde_json::json!({ "ok": true })))
+    } else {
+        // Distinguishing "no such alert" from "already resolved" would leak
+        // nothing useful and give the client one more case to handle.
+        Err(ApiError::not_found(format!(
+            "No open alert with id '{id}'"
+        )))
+    }
 }
 
 /// POST /builds/targets/{name} — start a build using a named orca.yaml build target.
@@ -5517,7 +6066,7 @@ async fn deploy_template(
     let template = templates
         .iter()
         .find(|t| t.id == id)
-        .ok_or_else(|| anyhow::anyhow!("Template '{}' not found", id))?;
+        .ok_or_else(|| ApiError::not_found(format!("Template '{}' not found", id)))?;
 
     // Only used when a caller still sends the raw placeholder (scripts, CLI):
     // minted once per deploy so every placeholder in one stack resolves to the
@@ -6221,24 +6770,42 @@ struct LimaSettingsRequest {
     disk_gib: u32,
 }
 
+/// Run `limactl` in its own process group with a hard timeout.
+///
+/// Lima invocations spawn children (`ssh`, the host agent, `qemu`/`vz`).
+/// Timing out the *future* — which is what the previous
+/// `tokio::time::timeout(.., cmd.output())` idiom did — left that whole tree
+/// running, still holding the vsock and the `lima.yaml` lock, so every later
+/// `limactl` call failed until the machine was rebooted. Routing through
+/// `orca_core::proc` kills the group instead, and applies the Homebrew PATH in
+/// one place rather than at each call site.
+async fn lima(
+    args: &[&str],
+    timeout: Duration,
+) -> anyhow::Result<orca_core::proc::CommandOutput> {
+    let path_env = format!(
+        "/opt/homebrew/bin:/usr/local/bin:{}",
+        std::env::var("PATH").unwrap_or_default()
+    );
+    orca_core::proc::run(
+        "limactl",
+        args,
+        orca_core::proc::CommandOptions::new()
+            .env("PATH", path_env)
+            .timeout(timeout),
+    )
+    .await
+}
+
 async fn get_lima_settings() -> Result<impl IntoResponse, ApiError> {
     let memory_default = orca_backend_common::environment::detect_lima_memory_default().await;
-    let output = tokio::process::Command::new("limactl")
-        .args(["list", "--json"])
-        .env(
-            "PATH",
-            format!(
-                "/opt/homebrew/bin:/usr/local/bin:{}",
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .output()
+    let output = lima(&["list", "--json"], Duration::from_secs(30))
         .await
-        .map_err(|e| anyhow::anyhow!("limactl failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("limactl failed: {e:#}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     // limactl list --json outputs one JSON object per line (NDJSON)
-    let vms: Vec<serde_json::Value> = stdout
+    let vms: Vec<serde_json::Value> = output
+        .stdout
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
@@ -6306,59 +6873,48 @@ async fn save_lima_settings(Json(body): Json<LimaSettingsRequest>) -> Result<imp
     // Only one Lima edit at a time — `limactl edit --set` rewrites
     // lima.yaml, so concurrent callers can corrupt it.
     let _lima_guard = LIMA_SETTINGS_LOCK.lock().await;
-    let path_env = format!(
-        "/opt/homebrew/bin:/usr/local/bin:{}",
-        std::env::var("PATH").unwrap_or_default()
-    );
 
+    // NOTE: 120s is tight for a cold `limactl start` that has to download the
+    // base image. It is preserved here to keep this handler's worst-case
+    // response time bounded; the daemon's own start path (main.rs) allows 900s.
     let limactl_timeout = Duration::from_secs(120);
 
     // Stop the VM
-    let _ = tokio::time::timeout(
-        limactl_timeout,
-        tokio::process::Command::new("limactl")
-            .args(["stop", &body.name])
-            .env("PATH", &path_env)
-            .output(),
-    )
-    .await;
+    let _ = lima(&["stop", &body.name], limactl_timeout).await;
 
     // Use limactl edit with --set to change resources
     let set_expr = format!(
         ".cpus = {} | .memory = \"{}GiB\" | .disk = \"{}GiB\"",
         body.cpus, body.memory_gib, body.disk_gib
     );
-    let edit_output = tokio::time::timeout(
+    // Report child-command failures with a `command_failed` / `timeout` code
+    // rather than the generic `internal` a bare `?` would produce, so the UI can
+    // distinguish "limactl is unhappy" from "the daemon has a bug".
+    let edit_out = lima(
+        &["edit", &body.name, "--set", &set_expr],
         limactl_timeout,
-        tokio::process::Command::new("limactl")
-            .args(["edit", &body.name, "--set", &set_expr])
-            .env("PATH", &path_env)
-            .output(),
     )
-    .await
-    .map_err(|_| anyhow::anyhow!("limactl edit timed out"))?
-    .map_err(|e| anyhow::anyhow!("limactl edit failed: {e}"))?;
-
-    if !edit_output.status.success() {
-        let stderr = String::from_utf8_lossy(&edit_output.stderr);
-        return Err(anyhow::anyhow!("limactl edit failed: {stderr}").into());
+    .await?;
+    if edit_out.timed_out {
+        return Err(ApiError::new(
+            ErrorCode::Timeout,
+            anyhow::anyhow!("limactl edit timed out after {limactl_timeout:?}"),
+        ));
+    }
+    if !edit_out.success {
+        return Err(ApiError::command_failed("limactl edit", &edit_out));
     }
 
     // Start the VM
-    let start_output = tokio::time::timeout(
-        limactl_timeout,
-        tokio::process::Command::new("limactl")
-            .args(["start", &body.name])
-            .env("PATH", &path_env)
-            .output(),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("limactl start timed out"))?
-    .map_err(|e| anyhow::anyhow!("limactl start failed: {e}"))?;
-
-    if !start_output.status.success() {
-        let stderr = String::from_utf8_lossy(&start_output.stderr);
-        return Err(anyhow::anyhow!("VM started with errors: {stderr}").into());
+    let start_out = lima(&["start", &body.name], limactl_timeout).await?;
+    if start_out.timed_out {
+        return Err(ApiError::new(
+            ErrorCode::Timeout,
+            anyhow::anyhow!("limactl start timed out after {limactl_timeout:?}"),
+        ));
+    }
+    if !start_out.success {
+        return Err(ApiError::command_failed("limactl start", &start_out));
     }
 
     Ok(Json(serde_json::json!({ "status": "ok" })))
@@ -6475,7 +7031,7 @@ async fn handle_tunnel(socket: WebSocket, host: String, resolved: Vec<std::net::
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
     // TCP → WebSocket
-    let tcp_to_ws = tokio::spawn(async move {
+    let mut tcp_to_ws = tokio::spawn(async move {
         let mut buf = vec![0u8; 32768];
         loop {
             match tcp_read.read(&mut buf).await {
@@ -6492,7 +7048,7 @@ async fn handle_tunnel(socket: WebSocket, host: String, resolved: Vec<std::net::
     });
 
     // WebSocket → TCP
-    let ws_to_tcp = tokio::spawn(async move {
+    let mut ws_to_tcp = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_receiver.next().await {
             match msg {
                 Message::Binary(data) => {
@@ -6507,9 +7063,17 @@ async fn handle_tunnel(socket: WebSocket, host: String, resolved: Vec<std::net::
     });
 
     tokio::select! {
-        _ = tcp_to_ws => {},
-        _ = ws_to_tcp => {},
+        _ = &mut tcp_to_ws => {},
+        _ = &mut ws_to_tcp => {},
     }
+
+    // A tunnel is over as soon as either direction ends — the peer is gone or
+    // the socket failed, so the surviving direction has nothing left to carry.
+    // Dropping a `JoinHandle` does not cancel its task, so `select!` alone left
+    // it running with the WebSocket and the TCP socket still open until
+    // something else tore the connection down.
+    tcp_to_ws.abort();
+    ws_to_tcp.abort();
     tracing::info!("Tunnel: closed connection to {host}:{port}");
 }
 
@@ -7140,6 +7704,13 @@ struct AiSettingsRequest {
     model: String,
     #[serde(default)]
     url: Option<String>,
+    /// Highest tool risk the agent may invoke.
+    ///
+    /// Optional so an existing client that does not know about this field keeps
+    /// working — and, importantly, so omitting it leaves the current ceiling
+    /// alone rather than silently resetting it.
+    #[serde(default)]
+    max_risk: Option<ToolRisk>,
 }
 
 /// Call Anthropic Claude API with tool use support
@@ -7447,6 +8018,19 @@ async fn save_ai_settings(
             }
         }
     }
+    if let Some(max_risk) = body.max_risk {
+        // Only touch the ceiling when the client actually sent one, so saving
+        // provider credentials cannot silently widen (or narrow) the agent's
+        // permissions as a side effect.
+        if max_risk != config.agent_risk {
+            tracing::info!(
+                "agent tool risk ceiling changed: '{}' -> '{}'",
+                config.agent_risk.as_str(),
+                max_risk.as_str()
+            );
+        }
+        config.agent_risk = max_risk;
+    }
     config
         .save()
         .map_err(|e| anyhow::anyhow!("Failed to save config: {e}"))?;
@@ -7462,6 +8046,14 @@ async fn get_ai_settings(State(state): State<Arc<AppState>>) -> Result<impl Into
         "anthropic_model": config.anthropic_model,
         "openai_model": config.openai_model,
         "openai_url": config.openai_url,
+        // The agent's tool ceiling, reported as data rather than assumed by the
+        // UI, so the two cannot drift when a tier is added.
+        "max_risk": config.agent_risk.as_str(),
+        "available_risks": [
+            ToolRisk::Read.as_str(),
+            ToolRisk::Write.as_str(),
+            ToolRisk::Destructive.as_str(),
+        ],
     })))
 }
 
@@ -8874,6 +9466,189 @@ fn uuid_v4() -> String {
 mod tests {
     use super::*;
 
+    /// The SSE `event:` name and the `kind.type` inside the payload are two
+    /// different spellings of the same thing, and the GUI dispatches on the
+    /// second while anything reading the raw stream sees the first. Both are
+    /// asserted so neither can drift unnoticed.
+    #[test]
+    fn an_alert_event_names_itself_consistently() {
+        assert_eq!(
+            event_type_name(&orca_core::event::EventKind::AlertChanged { open_count: 1 }),
+            "alert.changed"
+        );
+        let value = serde_json::to_value(orca_core::event::EventKind::AlertChanged {
+            open_count: 1,
+        })
+        .expect("serialises");
+        assert_eq!(
+            value["type"], "AlertChanged",
+            "the GUI's eventType check reads this field"
+        );
+    }
+
+    // ---- cache invalidation ----
+
+    /// A dropped cache entry costs a Docker round trip; a missed one shows the
+    /// user a list that does not reflect what they just did. Both directions
+    /// are asserted here because the rule is keyed off paths, and paths are easy
+    /// to get subtly wrong.
+    #[test]
+    fn only_a_successful_mutation_invalidates() {
+        use axum::http::Method;
+        let ok = StatusCode::OK;
+        let failed = StatusCode::INTERNAL_SERVER_ERROR;
+
+        assert_eq!(
+            invalidated_by(&Method::GET, "/api/v1/containers", ok),
+            Invalidated {
+                containers: false,
+                images: false
+            },
+            "reading a list does not change it"
+        );
+        assert_eq!(
+            invalidated_by(&Method::POST, "/api/v1/containers/abc/start", failed),
+            Invalidated {
+                containers: false,
+                images: false
+            },
+            "a failed start changed nothing, so the cache is still good"
+        );
+        assert_eq!(
+            invalidated_by(&Method::POST, "/api/v1/containers/abc/start", ok),
+            Invalidated {
+                containers: true,
+                images: false
+            }
+        );
+        assert_eq!(
+            invalidated_by(&Method::DELETE, "/api/v1/images/sha256:abc", ok),
+            Invalidated {
+                containers: false,
+                images: true
+            }
+        );
+        assert_eq!(
+            invalidated_by(&Method::POST, "/api/v1/images/pull", ok),
+            Invalidated {
+                containers: false,
+                images: true
+            }
+        );
+    }
+
+    #[test]
+    fn an_unrelated_route_invalidates_nothing() {
+        use axum::http::Method;
+        assert_eq!(
+            invalidated_by(&Method::POST, "/api/v1/stacks/web/deploy", StatusCode::OK),
+            Invalidated {
+                containers: false,
+                images: false
+            }
+        );
+    }
+
+    /// `contains` would have matched this; segment matching does not.
+    #[test]
+    fn a_path_that_merely_mentions_the_word_does_not_invalidate() {
+        use axum::http::Method;
+        assert_eq!(
+            invalidated_by(
+                &Method::POST,
+                "/api/v1/containers-archive",
+                StatusCode::OK
+            ),
+            Invalidated {
+                containers: false,
+                images: false
+            }
+        );
+        assert!(touches("/api/v1/containers/abc/exec", "containers"));
+        assert!(!touches("/api/v1/containers-archive", "containers"));
+        assert!(!touches("/api/v1/container", "containers"));
+    }
+
+    /// A route under the nested prefix still matches — the middleware sees the
+    /// full path, prefix included.
+    #[test]
+    fn the_nested_prefix_does_not_hide_the_segment() {
+        use axum::http::Method;
+        assert_eq!(
+            invalidated_by(&Method::POST, "/api/v1/images/prune", StatusCode::OK),
+            Invalidated {
+                containers: false,
+                images: true
+            }
+        );
+        assert_eq!(
+            invalidated_by(&Method::POST, "/containers", StatusCode::OK),
+            Invalidated {
+                containers: true,
+                images: false
+            },
+            "the rule works on the bare path too, not just the prefixed one"
+        );
+    }
+
+    // ---- response envelopes that gui/src/lib/types.ts mirrors by hand ----
+
+    /// The `/alerts` envelope `AlertsResponse` describes.
+    ///
+    /// `AlertsResponse` is a type now, and the GUI's TypeScript is generated
+    /// from it (`scripts/codegen-types.sh`). Generation models the Rust *type*,
+    /// though, and this endpoint's contract is serde's *output* — so this test
+    /// serialises the struct for real and pins the keys that actually go on the
+    /// wire. The two disagree wherever a serde attribute is in play, which is
+    /// exactly what §30 of komodo-borrowings-triage.md found.
+    #[test]
+    fn the_alert_envelope_serialises_to_the_keys_the_gui_reads() {
+        let open = orca_core::alert::Alert::open(
+            "a1",
+            orca_core::alert::SeverityLevel::Error,
+            "build:7",
+            orca_core::alert::AlertData::BuildFailed {
+                id: "7".into(),
+                error: Some("exit 1".into()),
+            },
+            "2026-01-01T00:00:00+00:00",
+        );
+        let mut resolved = open.clone();
+        resolved.resolved = true;
+        resolved.resolved_ts = Some("2026-01-01T00:01:00+00:00".into());
+
+        let envelope = serde_json::to_value(alerts_envelope(vec![open, resolved]))
+            .expect("the envelope serialises");
+        let obj = envelope.as_object().expect("an object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["alerts", "count", "open_count"]);
+        assert_eq!(obj["count"].as_u64(), Some(2), "count is the rows returned");
+        assert_eq!(
+            obj["open_count"].as_u64(),
+            Some(1),
+            "open_count counts the open ones, not the ones returned"
+        );
+        assert_eq!(obj["alerts"].as_array().expect("an array").len(), 2);
+    }
+
+    /// The `/operations` envelope `OperationsResponse` describes.
+    ///
+    /// Like the alert envelope (§30), this is a type now and the TypeScript is
+    /// generated from it — but generation models the Rust *type*, so the test
+    /// serialises for real and pins what actually goes on the wire.
+    #[test]
+    fn the_operation_envelope_serialises_to_the_keys_the_gui_reads() {
+        let envelope =
+            serde_json::to_value(operations_envelope(Vec::new())).expect("the envelope serialises");
+        let obj = envelope.as_object().expect("an object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["count", "operations"]);
+        assert_eq!(obj["count"].as_u64(), Some(0));
+        assert!(obj["operations"].as_array().expect("an array").is_empty());
+    }
+
     // ---- parse_orca_yaml_gateway_routes tests ----
 
     #[test]
@@ -9320,5 +10095,184 @@ nested:
     fn malformed_volume_specs_are_skipped() {
         let got = mount_source(&["no-colon", "mongodata:/data/db"], "wq9k", &["mongodata:/data/db"]);
         assert_eq!(got, vec!["mongodata-wq9k".to_string()]);
+    }
+
+    // ---- Error envelope ----
+
+    /// Read a response body in a plain `#[test]` (the crate has no
+    /// `#[tokio::test]` yet, and building a runtime is cheaper than converting
+    /// the module).
+    fn body_text(response: axum::response::Response) -> String {
+        let bytes = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+            .unwrap();
+        String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    /// The egress choke point. A `git clone` failure puts git's stderr into the
+    /// error message, and stderr quotes the remote URL — which, for a private
+    /// repo, is where the user's token lives.
+    #[test]
+    fn error_body_scrubs_credentials_embedded_in_urls() {
+        let response = ApiError(anyhow::anyhow!(
+            "git clone failed: fatal: Authentication failed for \
+             'https://someuser:ghp_realtokenvalue@github.com/o/r.git/'"
+        ))
+        .into_response();
+        let text = body_text(response);
+
+        assert!(
+            !text.contains("ghp_realtokenvalue"),
+            "the token reached the wire: {text}"
+        );
+        assert!(
+            text.contains("github.com/o/r.git"),
+            "redaction threw away the part that makes the error useful: {text}"
+        );
+    }
+
+    /// The server-side log keeps the full chain even though the client's copy is
+    /// scrubbed — that asymmetry is the whole point (diagnosability vs egress).
+    #[test]
+    fn scrubbing_happens_on_the_body_not_before_logging() {
+        let err = anyhow::anyhow!("outer")
+            .context("inner: https://u:tokendetail@example.com/x");
+        // The chain still carries the detail the response body will not.
+        let chain: Vec<String> = err.chain().map(|c| c.to_string()).collect();
+        assert!(chain.iter().any(|c| c.contains("tokendetail")));
+
+        let text = body_text(ApiError(err).into_response());
+        assert!(!text.contains("tokendetail"), "chain leaked into the body: {text}");
+    }
+
+    /// Locks in the batch-0 fix: "the resource does not exist" used to be a 500,
+    /// which made it indistinguishable from a daemon bug.
+    #[test]
+    fn not_found_carries_404_and_a_machine_readable_code() {
+        let response = ApiError::not_found("Build abc not found").into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let text = body_text(response);
+        assert!(text.contains("\"code\":\"not_found\""), "body was: {text}");
+        assert!(text.contains("Build abc not found"), "body was: {text}");
+    }
+
+    #[test]
+    fn internal_errors_are_500s_tagged_internal() {
+        let response = ApiError(anyhow::anyhow!("boom")).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body_text(response).contains("\"code\":\"internal\""));
+    }
+
+    #[test]
+    fn command_failures_are_tagged_and_scrubbed() {
+        let out = orca_core::proc::CommandOutput {
+            success: false,
+            exit_code: 128,
+            stdout: String::new(),
+            stderr: "fatal: could not read from https://x:sekrit@git.example.com/r".into(),
+            timed_out: false,
+        };
+        let response = ApiError::command_failed("git clone", &out).into_response();
+        let text = body_text(response);
+        assert!(text.contains("\"code\":\"command_failed\""), "body was: {text}");
+        assert!(!text.contains("sekrit"), "stderr secret reached the wire: {text}");
+        assert!(text.contains("exit 128"), "exit code should survive: {text}");
+    }
+}
+
+/// CORS is load-bearing for the *packaged* app: with no Vite proxy in front of
+/// it, the webview calls this daemon directly, so every request is cross-origin
+/// and carries an `Authorization` header — which makes the browser send an
+/// unauthenticated `OPTIONS` preflight first. If that preflight is not answered,
+/// *every page* fails at once with an opaque "Load failed".
+#[cfg(test)]
+mod cors_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::routing::get;
+    use tower::ServiceExt;
+
+    /// Just the layer under test — no auth, no state, no routes of consequence.
+    fn app() -> Router {
+        Router::new()
+            .route("/api/v1/containers", get(|| async { "[]" }))
+            .layer(cors_layer())
+    }
+
+    fn preflight(origin: &str) -> Request<Body> {
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/api/v1/containers")
+            .header("origin", origin)
+            .header("access-control-request-method", "GET")
+            .header(
+                "access-control-request-headers",
+                "authorization,content-type",
+            )
+            .body(Body::empty())
+            .expect("build request")
+    }
+
+    /// The macOS/Linux webview origin — the one that actually broke.
+    #[tokio::test]
+    async fn the_webview_origin_gets_a_usable_preflight() {
+        let res = app()
+            .oneshot(preflight("tauri://localhost"))
+            .await
+            .expect("oneshot");
+        assert_ne!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "a preflight never carries credentials, so 401 here breaks every page"
+        );
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("tauri://localhost"),
+        );
+        let allowed = res
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        // The direct client sends exactly these two headers; a preflight that
+        // omits either one fails the real request too.
+        assert!(allowed.contains("authorization"), "allow-headers: {allowed}");
+        assert!(allowed.contains("content-type"), "allow-headers: {allowed}");
+    }
+
+    /// Windows and Android send the `http://` form of the same origin. Allowing
+    /// only one of the two forms is a known way to break packaging.
+    #[tokio::test]
+    async fn the_windows_webview_origin_is_allowed() {
+        let res = app()
+            .oneshot(preflight("http://tauri.localhost"))
+            .await
+            .expect("oneshot");
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("http://tauri.localhost"),
+        );
+    }
+
+    /// ...but this is an allowlist, not a wildcard. The daemon is loopback-only,
+    /// and loopback is precisely what a browser can reach on the user's behalf,
+    /// so a page they merely visit must not be able to read its responses.
+    #[tokio::test]
+    async fn a_foreign_origin_is_not_granted_cors() {
+        let res = app()
+            .oneshot(preflight("https://evil.example"))
+            .await
+            .expect("oneshot");
+        assert!(
+            res.headers().get("access-control-allow-origin").is_none(),
+            "a foreign origin was granted CORS: {:?}",
+            res.headers().get("access-control-allow-origin"),
+        );
     }
 }

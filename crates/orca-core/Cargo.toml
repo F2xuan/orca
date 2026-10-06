@@ -22,3 +22,18 @@ subtle = "2"
 getrandom = { workspace = true }
 rand = { workspace = true }
 fs2 = "0.4"
+# TypeScript generation for the wire types. Optional and off by default: it is
+# a build-time tool, not a runtime dependency of the daemon.
+ts-rs = { version = "12", optional = true }
+# Cancellation for long-running child processes (see src/proc.rs).
+tokio-util = { version = "0.7", default-features = false }
+
+# Process-group signalling on Unix. Same major version already used by
+# orca-backend-native and src-tauri, so this adds no new dependency tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+# Generates gui/src/lib/generated/*.ts from the types below.
+# Run scripts/codegen-types.sh rather than this feature directly.
+ts-export = ["dep:ts-rs"]

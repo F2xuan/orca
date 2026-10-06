@@ -1,6 +1,6 @@
 import { createSignal, onMount, For, Show } from "solid-js";
 import { t } from "../lib/i18n";
-import { invoke } from "@tauri-apps/api/core";
+import { daemonDelete, daemonErrorMessage, daemonGet, daemonPost } from "../lib/daemonClient";
 import type { Volume } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
 import { formatTimestamp, formatBytes } from "../lib/format";
@@ -31,8 +31,8 @@ export default function VolumesPage(props: VolumesPageProps) {
   const refresh = async () => {
     try {
       const [result, sizesResult] = await Promise.all([
-        invoke("list_volumes") as Promise<Volume[]>,
-        invoke("volume_sizes") as Promise<{ sizes: Record<string, number> }>,
+        daemonGet<Volume[]>("/volumes"),
+        daemonGet<{ sizes: Record<string, number> }>("/volumes/sizes"),
       ]);
       setVolumes(result || []);
       setVolumeSizes(sizesResult?.sizes || {});
@@ -63,12 +63,12 @@ export default function VolumesPage(props: VolumesPageProps) {
     if (!await confirmDanger(t("Remove Volume"), t("Remove volume \"{name}\"? This will permanently delete the volume data.", { name }))) return;
     setDeletingName(name);
     try {
-      await invoke("remove_volume", { name });
+      await daemonDelete(`/volumes/${encodeURIComponent(name)}`);
       showToast(t("Volume \"{name}\" removed", { name }), "success");
       await refresh();
     } catch (err) {
       logError(`Failed to remove volume: ${err}`, `Volume "${name}"`);
-      showToast(t("Failed to remove volume: {error}", { error: String(err) }), "error");
+      showToast(t("Failed to remove volume: {error}", { error: daemonErrorMessage(err) }), "error");
     } finally {
       setDeletingName(null);
     }
@@ -81,13 +81,22 @@ export default function VolumesPage(props: VolumesPageProps) {
     setCreating(true);
     try {
       const labelLines = createLabels().split("\n").map(l => l.trim()).filter(l => l.includes("="));
-      await invoke("create_volume", { name, driver: createDriver().trim() || null, labels: labelLines.length > 0 ? labelLines : null });
+      const driver = createDriver().trim();
+      await daemonPost("/volumes", {
+        name,
+        // Omitted rather than sent empty: the daemon's `#[serde(default)]`
+        // only applies when the field is absent, so `driver: ""` would create
+        // a volume with an empty driver instead of the "local" default the
+        // Tauri command used to substitute here.
+        ...(driver ? { driver } : {}),
+        labels: labelLines,
+      });
       showToast(t("Volume \"{name}\" created", { name }), "success");
       setCreateName(""); setCreateDriver("local"); setCreateLabels(""); setShowCreate(false);
       await refresh();
     } catch (err) {
       logError(`Failed to create volume: ${err}`, `Volume "${name}"`);
-      showToast(t("Failed to create volume: {error}", { error: String(err) }), "error");
+      showToast(t("Failed to create volume: {error}", { error: daemonErrorMessage(err) }), "error");
     }
     setCreating(false);
   };

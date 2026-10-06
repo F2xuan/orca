@@ -3,6 +3,7 @@ import { t } from "../lib/i18n";
 import Spinner from "../components/Spinner";
 import Dropdown from "../components/Dropdown";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonDelete, daemonGet, daemonPost } from "../lib/daemonClient";
 import { useRefresh } from "../lib/useRefresh";
 import type { AppTemplate, SetupGuide, ImageSearchResult, RemoteHost, ActiveHost } from "../lib/types";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
@@ -185,7 +186,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
 
   const refreshTemplates = async () => {
     try {
-      const result = (await invoke("list_templates")) as AppTemplate[];
+      const result = await daemonGet<AppTemplate[]>("/templates");
       setTemplates(result);
     } catch {
       showToast(t("Failed to load templates"), "error");
@@ -277,7 +278,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
     setUserInputs(inputs);
     // Fetch existing container names for validation
     try {
-      const containers = (await invoke("list_containers")) as { name: string }[];
+      const containers = await daemonGet<{ name: string }[]>("/containers");
       const names = new Set(containers.map((c) => c.name.replace(/^\//, "")));
       setExistingNames(names);
       setNameConflict(names.has(deployName()));
@@ -502,7 +503,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
           const gwRoutes = result?.gateway_routes as Array<{ hostname: string; container_name: string; port: number }> | undefined;
           if (gwRoutes && gwRoutes.length > 0) {
             try {
-              const gwConfig = (await invoke("gateway_get_config")) as any;
+              const gwConfig = await daemonGet<any>("/gateway/config");
               const domain = gwConfig?.domain || "localhost";
               const urls = gwRoutes.map((r) => `${r.hostname}.${domain}`).join(", ");
               showToast(t("Gateway: {urls}", { urls }), "success");
@@ -514,7 +515,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
           // Suggest gateway if running but no routes were auto-registered
           if (!gwRoutes?.length) {
             try {
-              const gwStatus = (await invoke("gateway_status")) as any;
+              const gwStatus = await daemonGet<any>("/gateway/status");
               if (gwStatus?.running) {
                 showToast(t("Expose this stack via the Gateway?"), "info", {
                   label: t("Open Gateway"),
@@ -682,7 +683,9 @@ export default function TemplatesPage(props: TemplatesPageProps) {
         notes: editorNotes(),
         is_builtin: false,
       };
-      await invoke("save_user_template", { template });
+      // The daemon takes the template object itself as the body; it is not
+      // wrapped in a field.
+      await daemonPost("/templates/user", template);
       setEditorOpen(false);
       await refreshTemplates();
       showToast(t("Template \"{name}\" saved", { name: template.name }), "success");
@@ -702,7 +705,8 @@ export default function TemplatesPage(props: TemplatesPageProps) {
     });
     if (!ok) return;
     try {
-      await invoke("delete_user_template", { id: template.id });
+      // A query parameter, not a path segment — the endpoint deletes by id.
+      await daemonDelete(`/templates/user?id=${encodeURIComponent(template.id)}`);
       await refreshTemplates();
       showToast(t("Template \"{name}\" deleted", { name: template.name }), "success");
     } catch (e: any) {
@@ -861,7 +865,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
             />
             <button class="btn" onClick={async () => {
               try {
-                await invoke("refresh_templates");
+                await daemonPost("/templates/refresh");
                 showToast(t("Catalog refreshed"), "success");
                 refreshTemplates();
               } catch (e) { showToast(t("Refresh failed: {error}", { error: String(e) }), "error"); }
@@ -1325,7 +1329,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
                             <button class="btn btn-sm" style={{ gap: "6px" }} onClick={async () => {
                               // Find container by service name in the stack
                               try {
-                                const stacks = (await invoke("list_stacks")) as any[];
+                                const stacks = await daemonGet<any[]>("/stacks");
                                 const stack = stacks.find((s: any) => s.name === setupGuideStackName());
                                 if (stack) {
                                   const svc = stack.services?.find((s: any) => s.service === step.service || s.name?.includes(step.service));
@@ -1353,7 +1357,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
                               onClick={async () => {
                                 setRestartingService(step.service!);
                                 try {
-                                  const stacks = (await invoke("list_stacks")) as any[];
+                                  const stacks = await daemonGet<any[]>("/stacks");
                                   const stack = stacks.find((s: any) => s.name === setupGuideStackName());
                                   const svc = stack?.services?.find((s: any) => s.service === step.service || s.name?.includes(step.service));
                                   if (svc?.id) {
@@ -1389,7 +1393,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
                                     setExecRunning({ ...execRunning(), [i()]: true });
                                     setExecOutput({ ...execOutput(), [i()]: null });
                                     try {
-                                      const stacks = (await invoke("list_stacks")) as any[];
+                                      const stacks = await daemonGet<any[]>("/stacks");
                                       const stack = stacks.find((s: any) => s.name === setupGuideStackName());
                                       const svc = stack?.services?.find((s: any) => s.service === step.service || s.name?.includes(step.service));
                                       if (!svc?.id) {
@@ -1434,7 +1438,7 @@ export default function TemplatesPage(props: TemplatesPageProps) {
                           <Show when={step.type === "action" && step.action === "terminal" && step.service}>
                             <button class="btn btn-sm" style={{ gap: "6px" }} onClick={async () => {
                               try {
-                                const stacks = (await invoke("list_stacks")) as any[];
+                                const stacks = await daemonGet<any[]>("/stacks");
                                 const stack = stacks.find((s: any) => s.name === setupGuideStackName());
                                 const svc = stack?.services?.find((s: any) => s.service === step.service || s.name?.includes(step.service));
                                 if (svc?.id) {

@@ -1,5 +1,6 @@
 pub mod agent_tools;
 pub mod ai;
+pub mod alert;
 pub mod build;
 pub mod compose;
 pub mod config;
@@ -9,6 +10,10 @@ pub mod image;
 pub mod kubernetes;
 pub mod machine;
 pub mod network;
+pub mod operation;
+pub mod proc;
+pub mod redact;
+pub mod registry;
 pub mod runtime;
 pub mod templates;
 pub mod volume;

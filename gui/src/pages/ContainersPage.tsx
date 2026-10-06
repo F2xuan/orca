@@ -1,5 +1,8 @@
-import { createSignal, onMount, onCleanup, For, Show, createMemo } from "solid-js";
+import { createSignal, createEffect, onMount, onCleanup, For, Show, createMemo } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { runStackAction, type StackAction } from "../lib/daemonStacks";
+import { daemonGet, daemonPost } from "../lib/daemonClient";
+import { useContainers, useStacks } from "../lib/pollStore";
 import type { Container, ContainerStats, ComposeProject } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
 import { t } from "../lib/i18n";
@@ -59,23 +62,33 @@ export default function ContainersPage(props: ContainersPageProps) {
   const [exposeExistingRoutes, setExposeExistingRoutes] = createSignal<Array<{ hostname: string; url: string; port: number }>>([]);
   const [gatewayRoutes, setGatewayRoutes] = createSignal<Array<{ hostname: string; container_name: string; port: number }>>([]);
 
+  // Shared with the sidebar: one poll per resource instead of this page and the
+  // sidebar each keeping a timer and a copy of the same list.
+  const containersPoll = useContainers(3_000);
+  const stacksPoll = useStacks(3_000);
+  createEffect(() => {
+    const result = containersPoll.data();
+    if (result) {
+      setContainers(result as Container[]);
+      setLastUpdated(new Date());
+    }
+  });
+  createEffect(() => {
+    const result = stacksPoll.data();
+    if (result) setStacks(result as ComposeProject[]);
+  });
+
   const refresh = async () => {
     try {
-      const [containerResult, stackResult] = await Promise.all([
-        invoke("list_containers") as Promise<Container[]>,
-        invoke("list_stacks") as Promise<ComposeProject[]>,
-      ]);
-      setContainers(containerResult || []);
-      setStacks(stackResult || []);
-      setLastUpdated(new Date());
+      await Promise.all([containersPoll.refresh(), stacksPoll.refresh()]);
       // Fetch gateway routes for hostname badges (non-blocking)
-      invoke("gateway_list_routes").then((r) => setGatewayRoutes((r as any[]) || [])).catch(() => {});
+      daemonGet<any[]>("/gateway/routes").then((r) => setGatewayRoutes(r || [])).catch(() => {});
 
       // Auto-expand stacks with running containers (only on first load)
       if (!hasAutoExpanded) {
         hasAutoExpanded = true;
         const autoExpand = new Set(expanded());
-        for (const stack of stackResult) {
+        for (const stack of (stacksPoll.data() as ComposeProject[] | undefined) ?? []) {
           if (stack.services.some((s) => s.state === "Running")) {
             autoExpand.add(stack.name);
           }
@@ -134,7 +147,7 @@ export default function ContainersPage(props: ContainersPageProps) {
 
   const openExposeDialog = async (c: Container) => {
     try {
-      const routes = (await invoke("gateway_list_routes")) as Array<{ hostname: string; container_name: string; port: number; url: string }>;
+      const routes = await daemonGet<Array<{ hostname: string; container_name: string; port: number; url: string }>>("/gateway/routes");
       const existing = routes.filter((r) => r.container_name === c.name);
       setExposeExistingRoutes(existing.map((r) => ({ hostname: r.hostname, url: r.url || `https://${r.hostname}`, port: r.port })));
     } catch {
@@ -199,10 +212,10 @@ export default function ContainersPage(props: ContainersPageProps) {
 
   onMount(() => {
     refresh().then(fetchAllRunningStats);
-    const interval = setInterval(() => {
-      refresh();
-      fetchAllRunningStats();
-    }, 3000);
+    // Only the stats need this timer: the container and stack lists are kept
+    // fresh by the shared poll, so refreshing them here too would issue the same
+    // request twice on every tick.
+    const interval = setInterval(fetchAllRunningStats, 3000);
     document.addEventListener("click", handleClickOutside);
     onCleanup(() => {
       clearInterval(interval);
@@ -213,7 +226,7 @@ export default function ContainersPage(props: ContainersPageProps) {
   const restartStack = async (name: string) => {
     setStackActionInProgress(name);
     try {
-      await invoke("restart_stack", { name });
+      await runStackAction("restart_stack", name);
       showToast(t("Stack restarted"), "success");
       setTimeout(refresh, 500);
     } catch (err) {
@@ -226,7 +239,7 @@ export default function ContainersPage(props: ContainersPageProps) {
   const pullStack = async (name: string) => {
     setStackActionInProgress(name);
     try {
-      const result = await invoke("compose_pull", { name });
+      const result = await daemonPost(`/stacks/${encodeURIComponent(name)}/pull`);
       if (result && typeof result === "object") {
         const output = result as any;
         if (!output.success) {
@@ -247,7 +260,7 @@ export default function ContainersPage(props: ContainersPageProps) {
     if (!await confirmDanger(t("Delete Stack"), t("Delete stack \"{name}\"? This will stop and remove all containers in the stack.", { name }))) return;
     setStackActionInProgress(name);
     try {
-      await invoke("compose_down", { name });
+      await daemonPost(`/stacks/${encodeURIComponent(name)}/down`);
       showToast(t("Stack \"{name}\" removed", { name }), "success");
       await refresh();
     } catch (err) {
@@ -519,7 +532,7 @@ export default function ContainersPage(props: ContainersPageProps) {
     const label = action.replace(/_/g, " ").replace("compose ", "");
     setStackActionInProgress(name);
     try {
-      const result = await invoke(action, { name });
+      const result = await runStackAction(action as StackAction, name);
       if (result && typeof result === "object") {
         const output = result as any;
         if (output.success === false) {

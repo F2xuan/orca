@@ -1,5 +1,6 @@
 import { createSignal, onMount, onCleanup, For, Show, createMemo } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonGet, daemonPost } from "../lib/daemonClient";
 import { showToast } from "./Toast";
 import { t, setLocale, getLocale, type Locale } from "../lib/i18n";
 import { confirmDanger } from "./ConfirmDialog";
@@ -70,7 +71,7 @@ export default function CommandPalette(props: CommandPaletteProps) {
       });
       if (!ok) return;
       try {
-        await invoke("gateway_stop");
+        await daemonPost("/gateway/stop");
         showToast(t("Gateway stopped"), "success");
       } catch (e) {
         showToast(t("Failed to stop gateway: {error}", { error: String(e) }), "error");
@@ -84,7 +85,7 @@ export default function CommandPalette(props: CommandPaletteProps) {
       props.onClose();
       let running: Array<{ id: string; state: string; name: string }> = [];
       try {
-        const containers = await invoke("list_containers") as Array<{ id: string; state: string; name: string }>;
+        const containers = await daemonGet<Array<{ id: string; state: string; name: string }>>("/containers");
         running = containers.filter((c) => c.state === "Running");
       } catch (e) {
         showToast(t("Failed to list containers: {error}", { error: String(e) }), "error");

@@ -1,6 +1,7 @@
 import { createSignal, createEffect, onMount, onCleanup, For, Show } from "solid-js";
 import { t } from "../lib/i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { daemonGet, daemonPost } from "../lib/daemonClient";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { EnvironmentStatus, HealthCheck, MachineInfo, SystemHealth, DockerDesktopStatus } from "../lib/types";
 import { useRefresh } from "../lib/useRefresh";
@@ -67,10 +68,10 @@ export default function EnvironmentPage() {
     setLoading(true);
     try {
       const [envRes, machineRes, healthRes, ddRes] = await Promise.allSettled([
-        invoke("env_status"),
+        daemonGet("/environment/status"),
         invoke("get_machine_info"),
-        invoke("system_health"),
-        isMacOS() ? invoke("docker_desktop_status") : Promise.resolve(null),
+        daemonGet("/system/health"),
+        isMacOS() ? daemonGet("/environment/docker-desktop-status") : Promise.resolve(null),
       ]);
       if (envRes.status === "fulfilled") setStatus(envRes.value as EnvironmentStatus);
       if (machineRes.status === "fulfilled") setMachine(machineRes.value as MachineInfo);
@@ -292,13 +293,13 @@ export default function EnvironmentPage() {
 
       // Step 2: Switch Docker context to lima-orca
       showToast(t("Switching to Orca runtime..."), "info");
-      const result = await invoke("switch_to_orca_runtime") as { message: string };
+      const result = await daemonPost("/environment/switch-to-orca") as { message: string };
 
       // Step 3: Optionally stop Docker Desktop
       if (stopDdChecked()) {
         showToast(t("Stopping Docker Desktop..."), "info");
         try {
-          await invoke("stop_docker_desktop");
+          await daemonPost("/environment/stop-docker-desktop");
         } catch (e) {
           logError(`Failed to stop Docker Desktop: ${e}`);
         }
