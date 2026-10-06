@@ -54,10 +54,7 @@ pub enum RecvOutcome {
 /// Wrap every `ws_receiver.next()` in this. A read timeout on a terminal is only
 /// safe *because* the server pings: the peer has a contractual obligation to
 /// answer, so silence means the peer is gone rather than merely quiet.
-pub async fn recv_with_idle(
-    recv: &mut SplitStream<WebSocket>,
-    idle: Duration,
-) -> RecvOutcome {
+pub async fn recv_with_idle(recv: &mut SplitStream<WebSocket>, idle: Duration) -> RecvOutcome {
     match tokio::time::timeout(idle, recv.next()).await {
         Ok(Some(Ok(msg))) => RecvOutcome::Message(msg),
         // `Err` is a protocol/transport error, and `None` means the stream
@@ -125,11 +122,7 @@ pub fn spawn_pinger(
 /// drain; after `grace` the task is detached and the socket drops with it. Callers
 /// must drop *every* sender first (aborting the tasks that hold clones), otherwise
 /// `recv()` never sees the channel close and this always waits the full grace.
-pub async fn shutdown_pinger(
-    tx: mpsc::Sender<Message>,
-    handle: JoinHandle<()>,
-    grace: Duration,
-) {
+pub async fn shutdown_pinger(tx: mpsc::Sender<Message>, handle: JoinHandle<()>, grace: Duration) {
     drop(tx);
     let _ = tokio::time::timeout(grace, handle).await;
 }
@@ -168,19 +161,12 @@ mod real_socket_tests {
     use tokio::sync::oneshot;
     use tokio_tungstenite::tungstenite;
 
-    type Client = tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >;
+    type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
     /// A server shaped like `handle_terminal`: a pinger plus an idle-deadline read
     /// loop. It reports on `done` when its read loop exits, which is how the tests
     /// observe "the server gave up on this peer".
-    async fn idle_sensitive_server(
-        socket: WebSocket,
-        ping: Duration,
-        idle: Duration,
-        done: oneshot::Sender<()>,
-    ) {
+    async fn idle_sensitive_server(socket: WebSocket, ping: Duration, idle: Duration, done: oneshot::Sender<()>) {
         let (sender, mut receiver) = socket.split();
         let (tx, pinger) = spawn_pinger(sender, ping);
         loop {
@@ -202,10 +188,7 @@ mod real_socket_tests {
     }
 
     /// Start the server above on an ephemeral port.
-    async fn serve(
-        ping: Duration,
-        idle: Duration,
-    ) -> (String, oneshot::Receiver<()>, tokio::task::JoinHandle<()>) {
+    async fn serve(ping: Duration, idle: Duration) -> (String, oneshot::Receiver<()>, tokio::task::JoinHandle<()>) {
         let (done_tx, done_rx) = oneshot::channel();
         // Passed through a `Router` extension rather than captured by the handler
         // closure: a closure taking `WebSocketUpgrade` does not satisfy axum's

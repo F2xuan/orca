@@ -211,8 +211,7 @@ pub fn run() {
                             };
                             // Taken to document (and check) that this must be the
                             // main thread; the window APIs below are main-thread only.
-                            let _mtm = MainThreadMarker::new()
-                                .expect("with_webview must run on the main thread");
+                            let _mtm = MainThreadMarker::new().expect("with_webview must run on the main thread");
 
                             // Re-add the titled mask for native rounded corners and
                             // the traffic-light buttons.

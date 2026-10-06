@@ -1778,4 +1778,3 @@ mod tests {
         assert_eq!(capitalize("Local"), "Local");
     }
 }
-

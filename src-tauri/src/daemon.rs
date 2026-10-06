@@ -35,7 +35,10 @@ impl DaemonManager {
             let same_build = builds_match(running_build.as_deref(), on_disk_build.as_deref());
             match running_version {
                 Some(v) if v == expected_version && same_build => {
-                    tracing::info!("Orca daemon already running (v{v}, build {})", running_build.unwrap_or_default());
+                    tracing::info!(
+                        "Orca daemon already running (v{v}, build {})",
+                        running_build.unwrap_or_default()
+                    );
                     return Ok(());
                 }
                 Some(v) if v != expected_version => {

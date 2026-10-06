@@ -1169,12 +1169,7 @@ async fn handle_terminal(socket: WebSocket, state: Arc<AppState>, container_id: 
                     // typing, so this deadline is only safe because the pinger
                     // above is probing the peer: a live client answers every
                     // ping, and a client that is gone stops answering.
-                    let msg = match crate::ws::recv_with_idle(
-                        &mut ws_receiver,
-                        crate::ws::IDLE_TIMEOUT,
-                    )
-                    .await
-                    {
+                    let msg = match crate::ws::recv_with_idle(&mut ws_receiver, crate::ws::IDLE_TIMEOUT).await {
                         crate::ws::RecvOutcome::Message(msg) => msg,
                         crate::ws::RecvOutcome::Closed | crate::ws::RecvOutcome::Idle => break,
                     };
@@ -4805,11 +4800,10 @@ async fn handle_k8s_pod_terminal(socket: WebSocket, namespace: String, name: Str
     // WebSocket -> stdin
     let mut input_task = tokio::spawn(async move {
         loop {
-            let msg =
-                match crate::ws::recv_with_idle(&mut ws_receiver, crate::ws::IDLE_TIMEOUT).await {
-                    crate::ws::RecvOutcome::Message(msg) => msg,
-                    crate::ws::RecvOutcome::Closed | crate::ws::RecvOutcome::Idle => break,
-                };
+            let msg = match crate::ws::recv_with_idle(&mut ws_receiver, crate::ws::IDLE_TIMEOUT).await {
+                crate::ws::RecvOutcome::Message(msg) => msg,
+                crate::ws::RecvOutcome::Closed | crate::ws::RecvOutcome::Idle => break,
+            };
             match msg {
                 Message::Pong(_) => continue,
                 Message::Text(text) => {
@@ -7112,7 +7106,11 @@ async fn handle_tunnel(socket: WebSocket, host: String, resolved: Vec<std::net::
             match tcp_read.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    if out_for_task.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
+                    if out_for_task
+                        .send(Message::Binary(buf[..n].to_vec().into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -7127,11 +7125,10 @@ async fn handle_tunnel(socket: WebSocket, host: String, resolved: Vec<std::net::
     // WebSocket → TCP
     let mut ws_to_tcp = tokio::spawn(async move {
         loop {
-            let msg =
-                match crate::ws::recv_with_idle(&mut ws_receiver, crate::ws::IDLE_TIMEOUT).await {
-                    crate::ws::RecvOutcome::Message(msg) => msg,
-                    crate::ws::RecvOutcome::Closed | crate::ws::RecvOutcome::Idle => break,
-                };
+            let msg = match crate::ws::recv_with_idle(&mut ws_receiver, crate::ws::IDLE_TIMEOUT).await {
+                crate::ws::RecvOutcome::Message(msg) => msg,
+                crate::ws::RecvOutcome::Closed | crate::ws::RecvOutcome::Idle => break,
+            };
             match msg {
                 Message::Binary(data) => {
                     if tcp_write.write_all(&data).await.is_err() {

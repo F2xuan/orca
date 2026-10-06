@@ -2472,9 +2472,7 @@ pub async fn get_wsl_config() -> Result<serde_json::Value, String> {
                     in_wsl2_section = false;
                     continue;
                 }
-                if in_wsl2_section
-                    && let Some((key, value)) = trimmed.split_once('=')
-                {
+                if in_wsl2_section && let Some((key, value)) = trimmed.split_once('=') {
                     let key = key.trim().to_lowercase();
                     let value = value.trim().to_string();
                     match key.as_str() {
