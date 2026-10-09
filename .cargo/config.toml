@@ -1,0 +1,34 @@
+# Build settings for this checkout.
+#
+# ── Why the rustflags below are needed ──────────────────────────────────────
+#
+# On this machine `dyld` refuses to load the proc-macro `.dylib` files that the
+# linker produces by default:
+#
+#     dlopen(.../libzerofrom_derive-*.dylib, 0x0005):
+#       tried: '...' (mis-aligned LINKEDIT string pool, fileOffset=0x00267E44)
+#
+# rustc reports that as `can't find crate for <proc-macro>` plus cascading
+# "unresolved import" / "cannot find attribute" errors, which makes it look like
+# a dependency, feature or toolchain problem. It is none of those: the crate
+# builds fine, but its output cannot be loaded. Affected crates are the large
+# derive macros — `zerofrom-derive`, `darling_macro`, `serde_derive`,
+# `phf_macros`, `displaydoc`, `thiserror` — i.e. the Tauri dependency tree, which
+# is why `cargo build -p orca-daemon` was fine while `cargo tauri build` was not.
+#
+# The file itself is structurally sound (`otool -h`, `otool -l` and `nm` all read
+# it); only the LINKEDIT string pool is rejected. This is the linker's chained
+# fixups output, so turning them off produces a loadable dylib:
+#
+#     default              2,543,632 bytes   ❌ dyld refuses to load
+#     -no_fixup_chains     2,097,568 bytes   ✅ loads
+#
+# Verified end-to-end: with this flag `cargo tauri build --bundles app` compiles
+# everything and produces `target/release/bundle/macos/Orca Desktop.app`.
+#
+# Scope is deliberately limited to aarch64-apple-darwin so Linux/Windows and
+# Intel macOS builds are untouched. Remove this once the local linker+dyld
+# combination stops producing unloadable dylibs.
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-no_fixup_chains"]

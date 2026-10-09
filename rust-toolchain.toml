@@ -1,0 +1,19 @@
+# Pin the toolchain so builds are reproducible.
+#
+# NOTE: this file only takes effect when `cargo`/`rustc` resolve to the **rustup
+# shims** (`~/.cargo/bin`). On this machine `~/Library/FlyEnv/env/rust/bin` comes
+# first in PATH and shadows them with a pinned 1.94 binary, in which case rustup
+# settings (this file, `rustup override`, `cargo +toolchain`) are silently
+# ignored. Check with:
+#
+#     which cargo          # want: ~/.cargo/bin/cargo
+#     cargo --version
+#
+# 1.88.0 is the version this checkout has been verified to build the Tauri app
+# with. Edition 2024 requires >= 1.85, so 1.88 is compatible.
+#
+# This pin is NOT the fix for the `mis-aligned LINKEDIT string pool` failure:
+# that reproduces on 1.88 as well, and is addressed by the linker flag in
+# `.cargo/config.toml`. Keep this file only as a reproducibility pin.
+[toolchain]
+channel = "1.88.0"

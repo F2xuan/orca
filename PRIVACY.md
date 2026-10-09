@@ -20,7 +20,7 @@ Orca Desktop makes the following network connections. Every single one is listed
 | Connection | Destination | Purpose | Data Sent |
 |---|---|---|---|
 | **Update check** | `github.com` | Check for new app versions | App version (via GitHub Releases API) |
-| **Template catalog** | `orca-desktop.com/templates.json` | Fetch community app templates | None (plain GET request) |
+| **Template catalog** | `orca.9988770.xyz/templates.json` | Fetch community app templates | None (plain GET request) |
 
 The template catalog is fetched once per hour and cached locally. If you're offline, the cached version is used. The update check uses Tauri's built-in updater and can be disabled in settings.
 

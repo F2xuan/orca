@@ -111,7 +111,7 @@
 ### 应用模板
 
 - **一键部署应用**——数据库、Web 服务器、监控、AI、开发工具等
-- **社区目录**——模板来自 [orca-desktop.com/templates.json](https://orca-desktop.com/templates.json)，每小时更新
+- **社区目录**——模板来自 [orca.9988770.xyz/templates.json](https://orca.9988770.xyz/templates.json)，每小时更新
 - 预置合理默认值（端口、卷、环境变量）
 - 部署前的端口、环境变量、卷结构化编辑器
 - **Compose 堆栈模板**——带有 `compose_yaml` 的多服务模板（如 WordPress + MySQL、Webmail + Stalwart）

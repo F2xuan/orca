@@ -2502,7 +2502,7 @@ export default function SettingsPage(props: SettingsPageProps = {}) {
                 <div style={{ display: "flex", "flex-direction": "column", gap: "0" }}>
                   <For each={[
                     ["AUTO", "#d29922", "Update check", "github.com", "Checks for new versions on startup", "No user data"],
-                    ["AUTO", "#d29922", "Template catalog", "orca-desktop.com", "Fetches app templates (cached hourly)", "No user data"],
+                    ["AUTO", "#d29922", "Template catalog", "orca.9988770.xyz", "Fetches app templates (cached hourly)", "No user data"],
                     ["USER", "#58a6ff", "Docker Hub search", "hub.docker.com", "When you search for images", "Search query only"],
                     ["USER", "#58a6ff", "AI assistant", "Your provider", "When you click 'Ask AI'", "Context you see on screen"],
                     ["USER", "#58a6ff", "Image pull", "Your registry credentials", "When you click 'Pull'", "Image reference"],

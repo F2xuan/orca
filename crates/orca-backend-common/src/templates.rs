@@ -1,7 +1,11 @@
 use orca_core::templates::{AppTemplate, PASSWORD_PLACEHOLDER};
 
-/// Community catalog URL — hosted on GitHub Pages, updated via PRs.
-const CATALOG_URL: &str = "https://orca-desktop.com/templates.json";
+/// Community catalog URL — a static `templates.json` document.
+///
+/// Self-hosted on `orca.9988770.xyz` (Cloudflare-fronted, `cache-control:
+/// max-age=60`). The body is a plain `Vec<AppTemplate>`; see
+/// [`fetch_community_templates`] for the size cap and cache behaviour.
+const CATALOG_URL: &str = "https://orca.9988770.xyz/templates.json";
 
 /// Cache duration: 1 hour.
 const CACHE_MAX_AGE_SECS: u64 = 3600;
