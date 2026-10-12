@@ -1,6 +1,20 @@
 name: Package orca-daemon
 
+# Two ways to run this:
+#
+#   * Actions tab -> "Package orca-daemon" -> Run workflow  (manual, no tag needed)
+#   * push a v* tag                                          (also attaches to the Release)
+#
+# Manual dispatch is the recommended path in a fork: pushing a tag additionally
+# fires `release.yml`, which builds the *desktop app* and needs Apple/Tauri
+# signing secrets that a fork does not have. Building only the daemon avoids it.
 on:
+  workflow_dispatch:
+    inputs:
+      build_deb:
+        description: 'Also build the .deb package'
+        type: boolean
+        default: true
   push:
     tags:
       - 'v*'
@@ -8,9 +22,21 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  build-deb:
+  build:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    # Read at job level so the Cloudsmith step can test it in an `if:` — the
+    # `secrets` context is not reliably available in step-level `if:` conditions,
+    # but `env` is.
+    env:
+      CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
     strategy:
+      # One architecture failing must not cancel the other.
+      fail-fast: false
       matrix:
         include:
           - arch: x86_64
@@ -22,7 +48,6 @@ jobs:
             deb_arch: arm64
             runner: ubuntu-latest
 
-    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +55,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Install cross-compilation tools
         if: matrix.arch == 'aarch64'
@@ -43,17 +78,27 @@ jobs:
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
             export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
           fi
-          cargo build --release --target ${{ matrix.target }} --bin orca-daemon --bin orca
+          cargo build --release --locked --target ${{ matrix.target }} --bin orca-daemon --bin orca
         env:
           CARGO_TERM_COLOR: always
 
       - name: Extract version
         id: version
+        shell: bash
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "daemon version: $VERSION"
+
+      - name: Stage binaries
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/orca-daemon" "dist/orca-daemon-linux-${{ matrix.arch }}"
+          cp "target/${{ matrix.target }}/release/orca"        "dist/orca-linux-${{ matrix.arch }}"
+          chmod 755 dist/orca-daemon-linux-${{ matrix.arch }} dist/orca-linux-${{ matrix.arch }}
 
       - name: Build .deb package
+        if: github.event_name == 'push' || inputs.build_deb
         run: |
           VERSION=${{ steps.version.outputs.version }}
           PKG_DIR="orca-daemon_${VERSION}_${{ matrix.deb_arch }}"
@@ -63,7 +108,6 @@ jobs:
           mkdir -p "$PKG_DIR/etc/systemd/system"
           mkdir -p "$PKG_DIR/etc/orca"
 
-          # Control file
           cat > "$PKG_DIR/DEBIAN/control" << EOF
           Package: orca-daemon
           Version: ${VERSION}
@@ -78,7 +122,6 @@ jobs:
           Depends: docker.io | docker-ce | podman
           EOF
 
-          # Post-install script
           cat > "$PKG_DIR/DEBIAN/postinst" << 'EOF'
           #!/bin/bash
           set -e
@@ -91,12 +134,10 @@ jobs:
               echo "Orca: Generated API token in /etc/orca/config.json"
           fi
 
-          # Enable and start/restart service
           systemctl daemon-reload
           systemctl enable orca-daemon
           systemctl restart orca-daemon || systemctl start orca-daemon || true
 
-          # Print connection info
           TOKEN=$(grep -o '"api_token"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/orca/config.json | cut -d'"' -f4)
           IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "YOUR_IP")
           echo ""
@@ -104,12 +145,10 @@ jobs:
           echo "URL:   http://$IP:9477/api/v1"
           echo "Token: $TOKEN"
           echo ""
-          echo "Add this host in Orca Desktop → Settings → Remote Hosts"
-          echo "For production: set up TLS with a reverse proxy (Caddy/nginx)"
+          echo "Add this host in Orca Desktop -> Settings -> Remote Hosts"
           EOF
           chmod 755 "$PKG_DIR/DEBIAN/postinst"
 
-          # Pre-remove script
           cat > "$PKG_DIR/DEBIAN/prerm" << 'EOF'
           #!/bin/bash
           set -e
@@ -118,38 +157,54 @@ jobs:
           EOF
           chmod 755 "$PKG_DIR/DEBIAN/prerm"
 
-          # Binaries
           cp "target/${{ matrix.target }}/release/orca-daemon" "$PKG_DIR/usr/local/bin/"
-          cp "target/${{ matrix.target }}/release/orca" "$PKG_DIR/usr/local/bin/"
+          cp "target/${{ matrix.target }}/release/orca"        "$PKG_DIR/usr/local/bin/"
           chmod 755 "$PKG_DIR/usr/local/bin/orca-daemon"
           chmod 755 "$PKG_DIR/usr/local/bin/orca"
 
-          # Systemd service
           cp deploy/orca-daemon.service "$PKG_DIR/etc/systemd/system/"
 
-          # Build the .deb
           dpkg-deb --build "$PKG_DIR"
-
+          cp "${PKG_DIR}.deb" dist/
           echo "Built: ${PKG_DIR}.deb"
 
+      - name: Checksums
+        run: |
+          cd dist
+          shasum -a 256 * > SHA256SUMS.txt 2>/dev/null || sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # The reason this workflow is usable in a fork: the binaries are attached
+      # to the run itself, so no Release, no Cloudsmith account, and no secrets
+      # are required to get a downloadable artifact.
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orca-daemon-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload .deb to Cloudsmith
-        env:
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+        if: env.CLOUDSMITH_API_KEY != ''
         run: |
           pip install cloudsmith-cli
           VERSION=${{ steps.version.outputs.version }}
           DEB_FILE="orca-daemon_${VERSION}_${{ matrix.deb_arch }}.deb"
-
-          cloudsmith push deb edvin/orca/any-distro/any-version "$DEB_FILE" \
+          cloudsmith push deb edvin/orca/any-distro/any-version "dist/$DEB_FILE" \
             --api-key "$CLOUDSMITH_API_KEY" \
             --republish
 
-      - name: Upload standalone binary to release
+      # Only meaningful on a tag run, and only if the Release already exists
+      # (`release.yml` creates it as a draft). `|| true` keeps a missing release
+      # from turning a successful build red.
+      - name: Attach binaries to Release
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
-          BINARY="target/${{ matrix.target }}/release/orca-daemon"
-          RELEASE_NAME="orca-daemon-linux-${{ matrix.arch }}"
-          cp "$BINARY" "$RELEASE_NAME"
-          gh release upload "v${VERSION}" "$RELEASE_NAME" --clobber || true
+          gh release upload "v${VERSION}" \
+            "dist/orca-daemon-linux-${{ matrix.arch }}" \
+            "dist/orca-linux-${{ matrix.arch }}" \
+            --repo "${{ github.repository }}" --clobber || true
