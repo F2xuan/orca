@@ -91,6 +91,31 @@ export function resetDaemonBase(): void {
   cachedBase = null;
 }
 
+/**
+ * Switching the active host must drop the cached base.
+ *
+ * `get_daemon_base` answers with the *active* host, but this module asks once and
+ * keeps the answer forever. Tauri commands re-read the active host on every call,
+ * so without this the two routes to the daemon disagree after a switch: every
+ * `daemonGet`/`daemonPost` keeps talking to whichever daemon was active when the
+ * cache was first filled, while Rust-side calls follow the switch.
+ *
+ * The visible result is that selecting a remote host changes nothing on screen —
+ * the lists still come from the local daemon — while the Rust side asks the new
+ * host for stats on container IDs that only exist on the old one, which the
+ * daemon answers with a 500 for every poll tick.
+ *
+ * Registered at module level, following `metricsStore`: the invalidation must not
+ * depend on a component happening to be mounted when the switch occurs.
+ */
+let hostSwitchListenerRegistered = false;
+function initHostSwitchListener(): void {
+  if (hostSwitchListenerRegistered || typeof document === "undefined") return;
+  document.addEventListener("orca-host-switch", () => resetDaemonBase());
+  hostSwitchListenerRegistered = true;
+}
+initHostSwitchListener();
+
 async function request<T>(
   method: string,
   path: string,

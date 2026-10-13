@@ -20,7 +20,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRoot } from "solid-js";
-import { usePoller, __pollerStats, type Polled } from "../src/lib/pollStore";
+import { usePoller, __pollerStats, __hostSwitch, type Polled } from "../src/lib/pollStore";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -145,16 +145,18 @@ test("no polling while hidden, and a refresh on return", async (t) => {
     return calls;
   };
 
-  const listeners: (() => void)[] = [];
+  const listeners: Record<string, (() => void)[]> = {};
   let hidden = true;
-  // The store reads `document.hidden` and registers one visibilitychange
-  // listener; a stub drives both.
+  // The store reads `document.hidden` and registers its listeners here; a stub
+  // drives both. This is the only test that installs a document — the store binds
+  // its listeners once per module — so it is also the only place where the binding
+  // itself is observable.
   (globalThis as unknown as { document: unknown }).document = {
     get hidden() {
       return hidden;
     },
     addEventListener: (type: string, fn: () => void) => {
-      if (type === "visibilitychange") listeners.push(fn);
+      (listeners[type] ??= []).push(fn);
     },
   };
 
@@ -169,12 +171,17 @@ test("no polling while hidden, and a refresh on return", async (t) => {
 
   await settle();
   assert.equal(calls, 1, "the first fetch happens even while hidden");
+  assert.equal(
+    listeners["orca-host-switch"]?.length ?? 0,
+    1,
+    "the host-switch listener is bound when the store is first subscribed",
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(calls, 1, "timer ticks while hidden do not fetch");
 
   hidden = false;
-  for (const fn of listeners) fn();
+  for (const fn of listeners["visibilitychange"] ?? []) fn();
   // Deliberately not an exact count: the visibility handler fetches and the next
   // timer tick may land too. Either way the value is refreshed promptly, and
   // single-flight collapses them when they overlap.
@@ -184,4 +191,43 @@ test("no polling while hidden, and a refresh on return", async (t) => {
   const before = calls;
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.ok(calls > before, "polling resumes once visible");
+});
+
+test("a host switch drops the answer from the host that was left", async (t) => {
+  let calls = 0;
+  const gates: ((value: unknown) => void)[] = [];
+  const fetcher = () => {
+    calls += 1;
+    return new Promise<unknown>((resolve) => {
+      gates.push(resolve);
+    });
+  };
+
+  let poll!: Polled<unknown>;
+  const dispose = createRoot((d) => {
+    poll = usePoller("host-switch", fetcher, 60_000);
+    return d;
+  });
+  t.after(dispose);
+  assert.equal(calls, 1, "subscribing fetches immediately");
+
+  // The switch lands while that request is still in flight.
+  __hostSwitch();
+
+  // The refresh that accompanies a switch has to issue a real request rather than
+  // joining the abandoned one: joining it would leave the previous host's data on
+  // screen until the next poll tick, which reads as "switching did nothing".
+  const refresh = poll.refresh();
+  assert.equal(calls, 2, "the post-switch refresh does not join the stale request");
+
+  // The host that was left finally answers. Its value describes the wrong machine.
+  gates[0]({ host: "left" });
+  await settle();
+  assert.equal(poll.data(), undefined, "the previous host's answer is discarded");
+
+  // The replacement's slot must have survived that abandoned request settling.
+  gates[1]({ host: "entered" });
+  await refresh;
+  await settle();
+  assert.deepEqual(poll.data(), { host: "entered" });
 });

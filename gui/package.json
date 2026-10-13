@@ -9,7 +9,7 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "preview": "vite preview",
-    "test:unit": "esbuild unit/pollStore.test.ts --bundle --format=esm --platform=node --outfile=unit/.build/unit-test.mjs --log-level=warning && node --test --test-force-exit unit/.build/unit-test.mjs"
+    "test:unit": "rm -rf unit/.build && esbuild unit/pollStore.test.ts unit/daemonClient.test.ts --bundle --format=esm --platform=node --outdir=unit/.build --out-extension:.js=.mjs --log-level=warning && node --test --test-force-exit unit/.build/pollStore.test.mjs unit/.build/daemonClient.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

@@ -43,6 +43,9 @@ interface Entry {
   requestedMs: Set<number>;
   timer: ReturnType<typeof setInterval> | null;
   inFlight: Promise<void> | null;
+  /** The `epoch` the in-flight fetch belongs to. Compared on settle so a request
+   *  issued before a host switch cannot write its answer over the new host's. */
+  inFlightEpoch: number;
   subscribers: number;
   data: Accessor<unknown>;
   setData: (value: unknown) => void;
@@ -56,6 +59,51 @@ interface Entry {
 
 const entries = new Map<string, Entry>();
 let visibilityBound = false;
+
+/**
+ * Bumped on every host switch.
+ *
+ * Every polled value and every in-flight request describes one machine, so a
+ * switch makes all of them stale at once — they are about the host the user just
+ * left. A fetch records the epoch it started in and drops its answer if the epoch
+ * moved meanwhile, which stops a slow reply from the previous host from landing
+ * on top of the new host's data.
+ *
+ * Note the values themselves are deliberately *not* cleared here. Consumers latch
+ * polled data behind an `if (result)` guard (see `ContainersPage`), so setting it
+ * to `undefined` would be a no-op for them — the old rows would stay on screen.
+ * Replacing the value with the new host's answer is what actually updates them,
+ * and dropping the in-flight request is what lets that answer arrive on the
+ * refresh that accompanies the switch instead of up to a poll interval later.
+ */
+let epoch = 0;
+
+/**
+ * Discard in-flight fetches so the post-switch refresh starts a real request
+ * rather than joining one that is about to be thrown away.
+ *
+ * Exported as a test seam, following `__pollerStats`: the epoch handling is the
+ * part worth exercising and it needs no DOM.
+ */
+export function __hostSwitch(): void {
+  epoch += 1;
+  for (const entry of entries.values()) {
+    entry.inFlight = null;
+    // Orphaned so the abandoned request's own teardown cannot clear the slot its
+    // replacement is about to occupy.
+    entry.inFlightEpoch = -1;
+    // The abandoned request no longer owns the indicator; the refresh that
+    // follows the switch turns it back on.
+    entry.setLoading(false);
+  }
+}
+
+let hostSwitchBound = false;
+function bindHostSwitch(): void {
+  if (hostSwitchBound || typeof document === "undefined") return;
+  hostSwitchBound = true;
+  document.addEventListener("orca-host-switch", __hostSwitch);
+}
 
 function intervalFor(entry: Entry): number {
   return entry.requestedMs.size > 0 ? Math.min(...entry.requestedMs) : 0;
@@ -73,6 +121,7 @@ function entryFor(key: string, fetcher: () => Promise<unknown>, intervalMs: numb
       requestedMs: new Set<number>(),
       timer: null,
       inFlight: null,
+      inFlightEpoch: -1,
       subscribers: 0,
       data,
       setData,
@@ -94,17 +143,28 @@ function entryFor(key: string, fetcher: () => Promise<unknown>, intervalMs: numb
 async function fetchOnce(entry: Entry): Promise<void> {
   if (entry.inFlight) return entry.inFlight;
   entry.setLoading(true);
+  const startedAt = epoch;
+  entry.inFlightEpoch = startedAt;
   entry.inFlight = (async () => {
     try {
       const value = await entry.fetcher();
+      // The host may have changed while this was in flight, in which case the
+      // answer describes a machine the user is no longer looking at.
+      if (startedAt !== epoch) return;
       entry.setData(value);
       entry.setError(undefined);
       entry.setUpdatedAt(Date.now());
     } catch (err) {
+      if (startedAt !== epoch) return;
       entry.setError(err instanceof Error ? err.message : String(err));
     } finally {
-      entry.setLoading(false);
-      entry.inFlight = null;
+      // Only the fetch that still owns the slot may release it. A host switch
+      // orphans this one and a replacement may already hold both the slot and
+      // the loading state.
+      if (entry.inFlightEpoch === startedAt) {
+        entry.setLoading(false);
+        entry.inFlight = null;
+      }
     }
   })();
   return entry.inFlight;
@@ -149,6 +209,7 @@ export function usePoller<T>(key: string, fetcher: () => Promise<T>, intervalMs:
   const entry = entryFor(key, fetcher as () => Promise<unknown>, intervalMs);
   entry.subscribers += 1;
   bindVisibility();
+  bindHostSwitch();
   start(entry);
   void fetchOnce(entry);
   onCleanup(() => {
