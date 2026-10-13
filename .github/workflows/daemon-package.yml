@@ -214,10 +214,17 @@ jobs:
       # The reason this workflow is usable in a fork: the binaries are attached
       # to the run itself, so no Release, no Cloudsmith account, and no secrets
       # are required to get a downloadable artifact.
+      #
+      # `-musl` is part of the artifact name on purpose. The files inside keep
+      # their unsuffixed names, because those are what scripts and the docs
+      # expect, but the name you actually click to download must say which libc
+      # it is. Upstream publishes `orca-daemon-linux-x86_64` as a *glibc-dynamic*
+      # binary, so without the suffix this fork's static build is indistinguishable
+      # from upstream's in the UI — same name, different linkage.
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: orca-daemon-linux-${{ matrix.arch }}
+          name: orca-daemon-linux-${{ matrix.arch }}-musl
           path: dist/*
           if-no-files-found: error
           retention-days: 30
