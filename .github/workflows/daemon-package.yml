@@ -196,26 +196,62 @@ jobs:
           #!/bin/bash
           set -e
 
-          # Generate API token if not exists
+          # Create the system-wide config if it does not exist yet.
+          #
+          # The daemon generates this, not us. `OrcaConfig::load` deliberately
+          # fails loudly on a config it cannot parse, and `data_dir`,
+          # `default_machine`, `start_on_login`, `show_tray_icon` and
+          # `telemetry` carry no serde default — so a hand-written minimal config
+          # is rejected outright and the service never starts:
+          #
+          #   {"api_token": "<hex>"}  ->  Error: config at /etc/orca/config.json
+          #                               is not valid JSON: missing field `data_dir`
+          #
+          # Which is exactly what this package used to ship. Let the daemon write
+          # its own schema into a scratch home, then move it into place. The token
+          # is persisted before the listener is created, so the file is ready
+          # within milliseconds and stays written even if the daemon then exits.
           if [ ! -f /etc/orca/config.json ]; then
-              TOKEN=$(openssl rand -hex 32)
-              echo "{\"api_token\": \"$TOKEN\"}" > /etc/orca/config.json
-              chmod 600 /etc/orca/config.json
-              echo "Orca: Generated API token in /etc/orca/config.json"
+              mkdir -p /etc/orca
+              TMPHOME=$(mktemp -d)
+              HOME="$TMPHOME" \
+              XDG_CONFIG_HOME="$TMPHOME/.config" \
+              XDG_DATA_HOME="$TMPHOME/.local/share" \
+                  /usr/local/bin/orca-daemon --bind 127.0.0.1 --port 19477 >/dev/null 2>&1 &
+              DAEMON_PID=$!
+              for _ in $(seq 1 100); do
+                  [ -s "$TMPHOME/.config/orca/config.json" ] && break
+                  sleep 0.1
+              done
+              kill "$DAEMON_PID" 2>/dev/null || true
+              wait "$DAEMON_PID" 2>/dev/null || true
+
+              if [ -s "$TMPHOME/.config/orca/config.json" ]; then
+                  install -m 600 "$TMPHOME/.config/orca/config.json" /etc/orca/config.json
+                  echo "Orca: generated /etc/orca/config.json"
+              else
+                  echo "Orca: WARNING: could not generate /etc/orca/config.json." >&2
+                  echo "Orca: run '/usr/local/bin/orca-daemon --bind 0.0.0.0' once by hand," >&2
+                  echo "Orca: then 'systemctl restart orca-daemon'." >&2
+              fi
+              rm -rf "$TMPHOME"
           fi
 
           systemctl daemon-reload
           systemctl enable orca-daemon
           systemctl restart orca-daemon || systemctl start orca-daemon || true
 
-          TOKEN=$(grep -o '"api_token"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/orca/config.json | cut -d'"' -f4)
+          # `|| true`: without it a missing config aborts the whole install here
+          # with a cryptic pipeline-under-`set -e` failure.
+          TOKEN=$(grep -o '"api_token"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/orca/config.json 2>/dev/null | cut -d'"' -f4 || true)
           IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "YOUR_IP")
           echo ""
           echo "=== Orca Daemon Ready ==="
           echo "URL:   http://$IP:9477/api/v1"
-          echo "Token: $TOKEN"
+          echo "Token: ${TOKEN:-<read /etc/orca/config.json>}"
           echo ""
-          echo "Add this host in Orca Desktop -> Settings -> Remote Hosts"
+          echo "In Orca Desktop, adding the host is NOT enough. Pick it in the host"
+          echo "selector at the top-left of the window, which shows \"Local\" by default."
           EOF
           chmod 755 "$PKG_DIR/DEBIAN/postinst"
 
