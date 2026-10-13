@@ -147,10 +147,7 @@ impl<T> ResourceCache<T> {
     /// recorded against data that is now gone would read as "this failed"
     /// about a resource nobody has tried to load since.
     pub fn invalidate(&self) {
-        let mut snapshot = self
-            .snapshot
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut snapshot = self.snapshot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *snapshot = Snapshot::default();
     }
 }
@@ -224,16 +221,12 @@ impl<T: Send + Sync + 'static> ResourceCache<T> {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Snapshot<T>> {
-        self.snapshot
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.snapshot.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn fresh_snapshot(&self) -> Option<Snapshot<T>> {
         let snapshot = self.lock();
-        snapshot
-            .is_fresh(self.ttl, self.now())
-            .then(|| snapshot.clone())
+        snapshot.is_fresh(self.ttl, self.now()).then(|| snapshot.clone())
     }
 }
 
@@ -305,10 +298,7 @@ mod tests {
 
     fn cache(ttl: Duration) -> (ResourceCache<u32>, Arc<FakeClock>) {
         let clock = FakeClock::new();
-        (
-            ResourceCache::with_clock(ttl, clock.clock()),
-            clock,
-        )
+        (ResourceCache::with_clock(ttl, clock.clock()), clock)
     }
 
     #[tokio::test]
@@ -483,6 +473,9 @@ mod tests {
         cache.get_or_refresh(|| fetcher.fetch(1)).await;
         clock.advance(500);
         let snapshot = cache.peek();
-        assert_eq!(snapshot.age(clock.base + Duration::from_millis(500)), Some(Duration::from_millis(500)));
+        assert_eq!(
+            snapshot.age(clock.base + Duration::from_millis(500)),
+            Some(Duration::from_millis(500))
+        );
     }
 }

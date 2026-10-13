@@ -24,8 +24,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use orca_core::event::{Event, EventKind};
 use orca_core::alert::{Alert, AlertData, AlertEngine, SeverityLevel, Threshold, Transition};
+use orca_core::event::{Event, EventKind};
 use orca_core::runtime::{Container, ContainerRuntime, ContainerState};
 
 use crate::alerts;
@@ -167,18 +167,14 @@ pub fn observe_containers(
         let (healthy, level, data) = match verdict(observation) {
             ContainerVerdict::Unknown => continue,
             ContainerVerdict::Healthy => (true, SeverityLevel::Error, healthy_data(observation)),
-            ContainerVerdict::Failed => {
-                (false, failure_level(observation), failed_data(observation))
-            }
+            ContainerVerdict::Failed => (false, failure_level(observation), failed_data(observation)),
         };
         let target = container_target(&observation.id);
         // An id is generated for every observation even though it is only used
         // when an alert actually opens. Collision-free ids are worth one
         // counter read per container per tick.
         let id = alerts::new_id("alert");
-        if let Some(transition) =
-            engine.observe_condition(&target, healthy, level, data, ts, &id)
-        {
+        if let Some(transition) = engine.observe_condition(&target, healthy, level, data, ts, &id) {
             transitions.push(transition);
         }
     }
@@ -209,14 +205,9 @@ pub fn close_vanished(
         // A healthy observation both closes the alert and clears the strike
         // count, so a future container reusing this id starts clean.
         let id = alerts::new_id("alert");
-        if let Some(transition) = engine.observe_condition(
-            &alert.target,
-            true,
-            SeverityLevel::Ok,
-            alert.data.clone(),
-            ts,
-            &id,
-        ) {
+        if let Some(transition) =
+            engine.observe_condition(&alert.target, true, SeverityLevel::Ok, alert.data.clone(), ts, &id)
+        {
             transitions.push(transition);
         }
     }
@@ -228,11 +219,7 @@ pub fn close_vanished(
 /// The threshold is the alert: the existing `> 90.0` warning inside
 /// `check_system_health` is a string in a list, so it cannot be de-bounced,
 /// persisted, or recovered — it simply says the same thing on every poll.
-pub fn observe_disk(
-    engine: &mut AlertEngine,
-    used_pct: f64,
-    ts: &str,
-) -> Option<Transition> {
+pub fn observe_disk(engine: &mut AlertEngine, used_pct: f64, ts: &str) -> Option<Transition> {
     let mount = ROOT_MOUNT.to_string();
     // Above 95% the situation is no longer "worth watching".
     let level = if used_pct >= 95.0 {
@@ -263,9 +250,7 @@ pub fn observe_disk(
 /// container has to be inspected to tell a crash from a deliberate stop.
 /// Only non-running ones are inspected, so the cost is bounded by how many
 /// containers are stopped rather than by how many exist.
-pub async fn observe(
-    runtime: &orca_backend_common::BollardRuntime,
-) -> (Vec<ContainerObservation>, HashSet<String>) {
+pub async fn observe(runtime: &orca_backend_common::BollardRuntime) -> (Vec<ContainerObservation>, HashSet<String>) {
     let containers = match runtime.list_containers(true).await {
         Ok(containers) => containers,
         Err(e) => {
@@ -286,10 +271,7 @@ pub async fn observe(
     (observations, present)
 }
 
-async fn observation_for(
-    runtime: &orca_backend_common::BollardRuntime,
-    container: Container,
-) -> ContainerObservation {
+async fn observation_for(runtime: &orca_backend_common::BollardRuntime, container: Container) -> ContainerObservation {
     let running = is_running(container.state);
     let mut observation = ContainerObservation {
         id: container.id.clone(),
@@ -419,10 +401,7 @@ mod tests {
 
     #[test]
     fn a_non_zero_exit_is_a_failure() {
-        assert_eq!(
-            verdict(&crashed("a", "web", 137)),
-            ContainerVerdict::Failed
-        );
+        assert_eq!(verdict(&crashed("a", "web", 137)), ContainerVerdict::Failed);
     }
 
     #[test]
@@ -628,8 +607,7 @@ mod tests {
     #[test]
     fn disk_fires_on_the_first_breach_because_hysteresis_is_its_de_bounce() {
         let mut engine = AlertEngine::new();
-        let transition =
-            observe_disk(&mut engine, 92.0, T0).expect("the first breach is the alert");
+        let transition = observe_disk(&mut engine, 92.0, T0).expect("the first breach is the alert");
         let alert = transition.persisted();
         assert_eq!(alert.target, "disk:/");
         assert_eq!(alert.level, SeverityLevel::Warning);
@@ -707,10 +685,6 @@ mod tests {
 
     /// The single open alert the engine is holding, for the tests above.
     fn engine_open(engine: &AlertEngine) -> Alert {
-        engine
-            .open_alerts()
-            .into_iter()
-            .next()
-            .expect("an open alert")
+        engine.open_alerts().into_iter().next().expect("an open alert")
     }
 }

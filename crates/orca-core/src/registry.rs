@@ -56,9 +56,7 @@ impl ImageReference {
 /// to send every request to the wrong host.
 fn split_registry(name: &str) -> (String, String) {
     match name.split_once('/') {
-        Some((first, rest))
-            if first.contains('.') || first.contains(':') || first == "localhost" =>
-        {
+        Some((first, rest)) if first.contains('.') || first.contains(':') || first == "localhost" => {
             let registry = match first {
                 // `docker.io` and `index.docker.io` are names for the same
                 // registry; requests only work against the API host.
@@ -101,9 +99,7 @@ pub fn parse_reference(reference: &str) -> ImageReference {
     // tag — that colon is a port — which is why this looks after the last `/`.
     let (name, tag) = match without_digest.rsplit_once('/') {
         Some((head, last)) => match last.split_once(':') {
-            Some((repo_last, tag)) if !tag.is_empty() => {
-                (format!("{head}/{repo_last}"), tag.to_string())
-            }
+            Some((repo_last, tag)) if !tag.is_empty() => (format!("{head}/{repo_last}"), tag.to_string()),
             _ => (without_digest.to_string(), "latest".to_string()),
         },
         None => match without_digest.split_once(':') {
@@ -294,11 +290,7 @@ pub fn parse_bearer_challenge(header: &str) -> Option<BearerChallenge> {
         }
     }
 
-    realm.map(|realm| BearerChallenge {
-        realm,
-        service,
-        scope,
-    })
+    realm.map(|realm| BearerChallenge { realm, service, scope })
 }
 
 /// Compute the digest of a manifest body.
@@ -326,11 +318,7 @@ pub fn host_of_server_url(server: &str) -> Option<String> {
     let host = rest.split('/').next().unwrap_or("").trim();
     // Drop `user:pass@` if present.
     let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
-    if host.is_empty() {
-        None
-    } else {
-        Some(host.to_string())
-    }
+    if host.is_empty() { None } else { Some(host.to_string()) }
 }
 
 /// Collapse the several names for Docker Hub's registry into one.
@@ -367,11 +355,7 @@ mod tests {
     fn bare_official_image_gains_library_and_latest() {
         assert_eq!(
             parse("alpine"),
-            (
-                DOCKER_HUB_API.into(),
-                "library/alpine".into(),
-                "latest".into()
-            )
+            (DOCKER_HUB_API.into(), "library/alpine".into(), "latest".into())
         );
     }
 
@@ -379,11 +363,7 @@ mod tests {
     fn official_image_with_tag_keeps_the_tag() {
         assert_eq!(
             parse("alpine:3.20"),
-            (
-                DOCKER_HUB_API.into(),
-                "library/alpine".into(),
-                "3.20".into()
-            )
+            (DOCKER_HUB_API.into(), "library/alpine".into(), "3.20".into())
         );
     }
 
@@ -393,11 +373,7 @@ mod tests {
         // namespace — NOT a self-hosted registry called `someuser`.
         assert_eq!(
             parse("someuser/app:v1"),
-            (
-                DOCKER_HUB_API.into(),
-                "someuser/app".into(),
-                "v1".into()
-            )
+            (DOCKER_HUB_API.into(), "someuser/app".into(), "v1".into())
         );
     }
 
@@ -417,11 +393,7 @@ mod tests {
         );
         assert_eq!(
             parse("registry.internal:5000/team/app:9"),
-            (
-                "registry.internal:5000".into(),
-                "team/app".into(),
-                "9".into()
-            )
+            ("registry.internal:5000".into(), "team/app".into(), "9".into())
         );
     }
 
@@ -440,11 +412,7 @@ mod tests {
         for name in ["docker.io/library/alpine:3.20", "index.docker.io/library/alpine:3.20"] {
             assert_eq!(
                 parse(name),
-                (
-                    DOCKER_HUB_API.into(),
-                    "library/alpine".into(),
-                    "3.20".into()
-                ),
+                (DOCKER_HUB_API.into(), "library/alpine".into(), "3.20".into()),
                 "{name}"
             );
         }
@@ -481,10 +449,7 @@ mod tests {
     #[test]
     fn manifest_path_uses_the_normalised_parts() {
         let reference = parse_reference("alpine:3.20");
-        assert_eq!(
-            reference.manifest_path(),
-            "/v2/library/alpine/manifests/3.20"
-        );
+        assert_eq!(reference.manifest_path(), "/v2/library/alpine/manifests/3.20");
         let reference = parse_reference("localhost:5000/app");
         assert_eq!(reference.manifest_path(), "/v2/app/manifests/latest");
     }
@@ -495,10 +460,7 @@ mod tests {
     fn local_digest_is_found_by_familiar_name() {
         let reference = parse_reference("alpine:3.20");
         let digests = vec!["alpine@sha256:abc".to_string()];
-        assert_eq!(
-            local_digest_for(&digests, &reference).as_deref(),
-            Some("sha256:abc")
-        );
+        assert_eq!(local_digest_for(&digests, &reference).as_deref(), Some("sha256:abc"));
     }
 
     #[test]
@@ -537,10 +499,7 @@ mod tests {
             "alpine@sha512:whatever".to_string(),
             "alpine@sha256:abc".to_string(),
         ];
-        assert_eq!(
-            local_digest_for(&digests, &reference).as_deref(),
-            Some("sha256:abc")
-        );
+        assert_eq!(local_digest_for(&digests, &reference).as_deref(), Some("sha256:abc"));
     }
 
     // ---- comparison ----
@@ -673,18 +632,14 @@ mod tests {
         .unwrap();
         assert_eq!(challenge.realm, "https://auth.docker.io/token");
         assert_eq!(challenge.service.as_deref(), Some("registry.docker.io"));
-        assert_eq!(
-            challenge.scope.as_deref(),
-            Some("repository:library/alpine:pull")
-        );
+        assert_eq!(challenge.scope.as_deref(), Some("repository:library/alpine:pull"));
     }
 
     #[test]
     fn parameter_order_does_not_matter() {
-        let challenge = parse_bearer_challenge(
-            r#"Bearer scope="repository:x/y:pull", realm="https://r/token", service="s""#,
-        )
-        .unwrap();
+        let challenge =
+            parse_bearer_challenge(r#"Bearer scope="repository:x/y:pull", realm="https://r/token", service="s""#)
+                .unwrap();
         assert_eq!(challenge.realm, "https://r/token");
         assert_eq!(challenge.scope.as_deref(), Some("repository:x/y:pull"));
     }
@@ -692,8 +647,7 @@ mod tests {
     #[test]
     fn a_missing_service_is_not_fatal() {
         // Some registries omit `service`; the token endpoint still works.
-        let challenge =
-            parse_bearer_challenge(r#"Bearer realm="https://r/token""#).unwrap();
+        let challenge = parse_bearer_challenge(r#"Bearer realm="https://r/token""#).unwrap();
         assert_eq!(challenge.realm, "https://r/token");
         assert!(challenge.service.is_none());
     }
@@ -707,8 +661,7 @@ mod tests {
 
     #[test]
     fn unquoted_values_are_accepted() {
-        let challenge =
-            parse_bearer_challenge("Bearer realm=https://r/token,service=s").unwrap();
+        let challenge = parse_bearer_challenge("Bearer realm=https://r/token,service=s").unwrap();
         assert_eq!(challenge.realm, "https://r/token");
         assert_eq!(challenge.service.as_deref(), Some("s"));
     }
@@ -721,8 +674,7 @@ mod tests {
 
     #[test]
     fn escaped_quotes_inside_a_value_are_handled() {
-        let challenge =
-            parse_bearer_challenge(r#"Bearer realm="https://r/a\"b/token",scope="x""#).unwrap();
+        let challenge = parse_bearer_challenge(r#"Bearer realm="https://r/a\"b/token",scope="x""#).unwrap();
         assert_eq!(challenge.realm, r#"https://r/a"b/token"#);
         assert_eq!(challenge.scope.as_deref(), Some("x"));
     }

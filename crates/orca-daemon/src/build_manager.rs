@@ -171,8 +171,7 @@ pub async fn update_build(id: &str, status: BuildStatus, image_id: Option<String
 
 /// Message recorded against builds that a daemon restart cut short. Exposed so
 /// the API and tests can assert on it rather than duplicating the string.
-pub const INTERRUPTED_ERROR: &str =
-    "interrupted: the daemon restarted while this build was running";
+pub const INTERRUPTED_ERROR: &str = "interrupted: the daemon restarted while this build was running";
 
 /// Pure core of the startup sweep, split out so the state transition can be
 /// tested without reading or writing the real history file.
@@ -181,10 +180,7 @@ pub const INTERRUPTED_ERROR: &str =
 /// `duration_secs`: `started_at` is known but the moment the build actually
 /// stopped is not, and `finished_at - started_at` would report "however long
 /// the daemon happened to stay down" as the build's runtime.
-fn interrupt_in_progress(
-    records: &mut [BuildRecord],
-    now: chrono::DateTime<chrono::Utc>,
-) -> usize {
+fn interrupt_in_progress(records: &mut [BuildRecord], now: chrono::DateTime<chrono::Utc>) -> usize {
     let mut interrupted = 0;
     for record in records.iter_mut() {
         if record.status != BuildStatus::InProgress {
@@ -628,10 +624,7 @@ mod tests {
         interrupt_in_progress(&mut records, now());
 
         assert_eq!(records[0].error.as_deref(), Some(INTERRUPTED_ERROR));
-        assert_eq!(
-            records[0].finished_at.as_deref(),
-            Some("2026-01-01T00:10:00+00:00")
-        );
+        assert_eq!(records[0].finished_at.as_deref(), Some("2026-01-01T00:10:00+00:00"));
         assert_eq!(
             records[0].duration_secs, None,
             "the build's real stop time is unknown; reporting the daemon's \

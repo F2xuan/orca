@@ -12,9 +12,7 @@ use crate::BollardRuntime;
 ///
 /// `all: true` matters: a **stopped** container still holds the volume and
 /// still makes `docker volume rm` fail, so it has to be counted.
-async fn usage_by_volume(
-    docker: &bollard::Docker,
-) -> anyhow::Result<HashMap<String, Vec<String>>> {
+async fn usage_by_volume(docker: &bollard::Docker) -> anyhow::Result<HashMap<String, Vec<String>>> {
     let options = ListContainersOptions::<String> {
         all: true,
         ..Default::default()
@@ -65,9 +63,7 @@ impl VolumeManager for BollardRuntime {
                 mountpoint: v.mountpoint.clone(),
                 labels: v.labels.clone(),
                 created_at: v.created_at.clone().unwrap_or_default(),
-                used_by: usage
-                    .as_ref()
-                    .map(|u| u.get(&v.name).cloned().unwrap_or_default()),
+                used_by: usage.as_ref().map(|u| u.get(&v.name).cloned().unwrap_or_default()),
             })
             .collect())
     }

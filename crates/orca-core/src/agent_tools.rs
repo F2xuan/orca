@@ -133,10 +133,7 @@ const TOOL_RISKS: &[(&str, ToolRisk)] = &[
 /// The risk tier of a catalog tool, or `None` when the name is not in the
 /// catalog at all. Callers should treat `None` as a refusal, not as "safe".
 pub fn tool_risk(name: &str) -> Option<ToolRisk> {
-    TOOL_RISKS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, risk)| *risk)
+    TOOL_RISKS.iter().find(|(n, _)| *n == name).map(|(_, risk)| *risk)
 }
 
 fn json_schema(properties: serde_json::Value) -> serde_json::Value {

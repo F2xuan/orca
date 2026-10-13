@@ -122,11 +122,7 @@ impl CommandOutput {
 
 /// Run a program with an explicit argv vector. **No shell is involved**, so
 /// shell metacharacters in `args` are passed through literally.
-pub async fn run<S: AsRef<str>>(
-    program: &str,
-    args: &[S],
-    opts: CommandOptions,
-) -> anyhow::Result<CommandOutput> {
+pub async fn run<S: AsRef<str>>(program: &str, args: &[S], opts: CommandOptions) -> anyhow::Result<CommandOutput> {
     let mut cmd = Command::new(program);
     for arg in args {
         cmd.arg(arg.as_ref());
@@ -235,9 +231,13 @@ async fn collect(mut cmd: Command, mut opts: CommandOptions, label: &str) -> any
         cmd.env(key, value);
     }
 
-    cmd.stdin(if opts.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.stdin(if opts.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     // Own process group: the precondition for signalling the whole tree.
     #[cfg(unix)]
     cmd.process_group(0);
@@ -245,9 +245,7 @@ async fn collect(mut cmd: Command, mut opts: CommandOptions, label: &str) -> any
     // direct child even if the GroupGuard has already been disarmed.
     cmd.kill_on_drop(true);
 
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("failed to spawn `{label}`"))?;
+    let mut child = cmd.spawn().with_context(|| format!("failed to spawn `{label}`"))?;
 
     let pgid = child.id();
     let mut guard = GroupGuard { pgid };
@@ -302,9 +300,7 @@ mod tests {
     #[tokio::test]
     async fn argv_is_not_shell_interpreted() {
         // A shell would treat `&&` as a command separator and print only "a".
-        let out = run("echo", &["a", "&&", "b"], CommandOptions::default())
-            .await
-            .unwrap();
+        let out = run("echo", &["a", "&&", "b"], CommandOptions::default()).await.unwrap();
         assert!(out.success);
         assert_eq!(out.stdout.trim(), "a && b");
     }
@@ -350,10 +346,7 @@ mod tests {
         // what it read from stdin. The secret reaches it over stdin only.
         let out = run(
             "sh",
-            &[
-                "-c",
-                "ps -o command= -p $$; read -r line; printf 'len:%s' \"${#line}\"",
-            ],
+            &["-c", "ps -o command= -p $$; read -r line; printf 'len:%s' \"${#line}\""],
             CommandOptions::default().stdin("super-secret".to_string()),
         )
         .await
@@ -416,9 +409,13 @@ mod tests {
 
     #[tokio::test]
     async fn missing_program_is_a_contextual_error() {
-        let err = run("orca-definitely-not-a-real-binary", &[] as &[&str], CommandOptions::default())
-            .await
-            .unwrap_err();
+        let err = run(
+            "orca-definitely-not-a-real-binary",
+            &[] as &[&str],
+            CommandOptions::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("failed to spawn"), "{err}");
     }
 }

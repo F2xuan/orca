@@ -299,7 +299,10 @@ mod tests {
     #[test]
     fn every_url_in_a_multi_url_message_is_blanked() {
         let text = "tried https://a:1@x.com and https://b:2@y.com";
-        assert_eq!(redact_url_credentials(text), "tried https://***@x.com and https://***@y.com");
+        assert_eq!(
+            redact_url_credentials(text),
+            "tried https://***@x.com and https://***@y.com"
+        );
     }
 
     #[test]
@@ -348,7 +351,7 @@ mod tests {
     #[test]
     fn longer_values_win_over_their_own_substrings() {
         let mut registry = SecretRegistry::new();
-        registry.add("abcdefgh");          // 8 chars, registered
+        registry.add("abcdefgh"); // 8 chars, registered
         registry.add("abcdefgh-extended"); // contains the above
         assert_eq!(registry.redact("abcdefgh-extended"), REDACTED);
     }

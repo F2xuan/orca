@@ -51,9 +51,7 @@ fn build_usage(containers: &[bollard::models::ContainerSummary]) -> HashMap<Stri
 ///
 /// `Err` is returned rather than an empty map so callers can distinguish
 /// "nothing uses this image" from "we couldn't find out".
-async fn usage_by_image(
-    docker: &bollard::Docker,
-) -> anyhow::Result<HashMap<String, Vec<ImageUse>>> {
+async fn usage_by_image(docker: &bollard::Docker) -> anyhow::Result<HashMap<String, Vec<ImageUse>>> {
     let options = ListContainersOptions::<String> {
         all: true,
         ..Default::default()
@@ -88,9 +86,7 @@ impl ImageManager for BollardRuntime {
                 repo_digests: img.repo_digests.clone(),
                 size_bytes: img.size as u64,
                 created_at: img.created.to_string(),
-                used_by: usage
-                    .as_ref()
-                    .map(|u| u.get(&img.id).cloned().unwrap_or_default()),
+                used_by: usage.as_ref().map(|u| u.get(&img.id).cloned().unwrap_or_default()),
             })
             .collect())
     }
@@ -518,12 +514,7 @@ mod tests {
 
     #[test]
     fn usage_falls_back_to_short_id_when_container_is_unnamed() {
-        let cs = vec![container(
-            "abcdef0123456789",
-            None,
-            Some("sha256:aaa"),
-            "running",
-        )];
+        let cs = vec![container("abcdef0123456789", None, Some("sha256:aaa"), "running")];
         assert_eq!(build_usage(&cs)["sha256:aaa"][0].name, "abcdef012345");
     }
 

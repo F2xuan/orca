@@ -264,10 +264,7 @@ impl Threshold {
     }
 
     pub fn with_hysteresis(fire_at: f64, hysteresis: f64) -> Self {
-        Self {
-            fire_at,
-            hysteresis,
-        }
+        Self { fire_at, hysteresis }
     }
 
     /// Whether the value is bad enough to fire.
@@ -381,10 +378,7 @@ impl AlertEngine {
 
     /// How many alerts are open. Useful for a badge and for tests.
     pub fn open_count(&self) -> usize {
-        self.conditions
-            .values()
-            .filter(|state| state.open.is_some())
-            .count()
+        self.conditions.values().filter(|state| state.open.is_some()).count()
             + self.metrics.values().filter(|state| state.open.is_some()).count()
             + self.once.values().filter(|state| state.open.is_some()).count()
     }
@@ -410,10 +404,7 @@ impl AlertEngine {
             // matters as much as closing: leaving the count armed would let two
             // unrelated blips minutes apart add up to one false alarm.
             state.breaches = 0;
-            return state
-                .open
-                .take()
-                .map(|open| Self::recover(open, ts));
+            return state.open.take().map(|open| Self::recover(open, ts));
         }
 
         state.breaches = state.breaches.saturating_add(1);
@@ -518,10 +509,7 @@ impl AlertEngine {
             }
             self.notified_once.insert(target.to_string());
             let alert = Alert::open(id, level, target, data, ts);
-            self.once
-                .entry(target.to_string())
-                .or_default()
-                .open = Some(alert.clone());
+            self.once.entry(target.to_string()).or_default().open = Some(alert.clone());
             return Some(Transition::Open(alert));
         }
 
@@ -713,11 +701,7 @@ mod tests {
                 assert_eq!(stored.resolved_ts.as_deref(), Some(T1));
                 // History records how bad it got; only the notification says
                 // "recovered".
-                assert_eq!(
-                    stored.level,
-                    SeverityLevel::Error,
-                    "the stored row keeps its severity"
-                );
+                assert_eq!(stored.level, SeverityLevel::Error, "the stored row keeps its severity");
                 assert_eq!(notification.level, SeverityLevel::Ok);
                 assert_eq!(notification.id, stored.id);
             }
@@ -731,9 +715,11 @@ mod tests {
         let mut engine = AlertEngine::new();
         engine.observe_condition("c1", false, SeverityLevel::Error, exited("c1"), T0, "a1");
         engine.observe_condition("c1", false, SeverityLevel::Error, exited("c1"), T1, "a2");
-        assert!(engine
-            .observe_condition("c1", true, SeverityLevel::Error, exited("c1"), T1, "a3")
-            .is_some());
+        assert!(
+            engine
+                .observe_condition("c1", true, SeverityLevel::Error, exited("c1"), T1, "a3")
+                .is_some()
+        );
         assert_eq!(
             engine.observe_condition("c1", true, SeverityLevel::Error, exited("c1"), T1, "a4"),
             None
@@ -813,9 +799,11 @@ mod tests {
     fn a_metric_fires_at_or_above_the_threshold() {
         let mut engine = AlertEngine::new();
         let threshold = Threshold::new(90.0);
-        assert!(engine
-            .observe_metric("disk:/", 90.0, threshold, SeverityLevel::Warning, disk(90), T0, "a1")
-            .is_some());
+        assert!(
+            engine
+                .observe_metric("disk:/", 90.0, threshold, SeverityLevel::Warning, disk(90), T0, "a1")
+                .is_some()
+        );
     }
 
     #[test]
@@ -835,9 +823,11 @@ mod tests {
     fn a_value_jittering_across_the_fire_line_does_not_flap() {
         let mut engine = AlertEngine::new();
         let threshold = Threshold::new(90.0);
-        assert!(engine
-            .observe_metric("disk:/", 91.0, threshold, SeverityLevel::Warning, disk(91), T0, "a1")
-            .is_some());
+        assert!(
+            engine
+                .observe_metric("disk:/", 91.0, threshold, SeverityLevel::Warning, disk(91), T0, "a1")
+                .is_some()
+        );
         for pct in [89.9, 90.1, 89.5, 90.0, 87.0] {
             assert_eq!(
                 engine.observe_metric(
@@ -907,9 +897,12 @@ mod tests {
         let data = AlertData::ImageUpdateAvailable {
             image: "alpine:3.20".to_string(),
         };
-        assert!(engine
-            .observe_once("img:alpine", true, SeverityLevel::Warning, data.clone(), T0, "a1")
-            .is_some(), "the first sighting notifies");
+        assert!(
+            engine
+                .observe_once("img:alpine", true, SeverityLevel::Warning, data.clone(), T0, "a1")
+                .is_some(),
+            "the first sighting notifies"
+        );
         assert_eq!(
             engine.observe_once("img:alpine", true, SeverityLevel::Warning, data.clone(), T1, "a2"),
             None,
@@ -959,9 +952,11 @@ mod tests {
             image: "alpine:3.20".to_string(),
         };
         engine.observe_once("img:alpine", true, SeverityLevel::Warning, data.clone(), T0, "a1");
-        assert!(engine
-            .observe_once("img:alpine", false, SeverityLevel::Warning, data.clone(), T1, "a2")
-            .is_some());
+        assert!(
+            engine
+                .observe_once("img:alpine", false, SeverityLevel::Warning, data.clone(), T1, "a2")
+                .is_some()
+        );
         assert_eq!(
             engine.observe_once("img:alpine", false, SeverityLevel::Warning, data, T1, "a3"),
             None
@@ -988,9 +983,11 @@ mod tests {
             engine.observe_condition("c2", false, SeverityLevel::Error, exited("c2"), T0, "a2"),
             None
         );
-        assert!(engine
-            .observe_condition("c2", false, SeverityLevel::Error, exited("c2"), T0, "a3")
-            .is_some());
+        assert!(
+            engine
+                .observe_condition("c2", false, SeverityLevel::Error, exited("c2"), T0, "a3")
+                .is_some()
+        );
         assert_eq!(engine.open_count(), 1, "c1 is still only pending");
 
         // c1 opens on its own second strike, not on c2's.
@@ -1003,9 +1000,11 @@ mod tests {
         }
 
         // And c2 recovering leaves c1 open.
-        assert!(engine
-            .observe_condition("c2", true, SeverityLevel::Error, exited("c2"), T1, "a5")
-            .is_some());
+        assert!(
+            engine
+                .observe_condition("c2", true, SeverityLevel::Error, exited("c2"), T1, "a5")
+                .is_some()
+        );
         assert_eq!(engine.open_count(), 1, "only c1 remains open");
     }
 
@@ -1045,8 +1044,7 @@ mod tests {
 
     #[test]
     fn an_unknown_data_kind_does_not_break_the_log() {
-        let data: AlertData =
-            serde_json::from_str(r#"{"kind":"quantum_flux","degree":9}"#).unwrap();
+        let data: AlertData = serde_json::from_str(r#"{"kind":"quantum_flux","degree":9}"#).unwrap();
         assert_eq!(data, AlertData::Unknown);
         assert!(!data.summary().is_empty());
     }
@@ -1054,23 +1052,29 @@ mod tests {
     #[test]
     fn every_summary_is_non_empty_and_names_its_subject() {
         assert!(exited("web").summary().contains("web"));
-        assert!(AlertData::ContainerUnhealthy {
-            id: "c".into(),
-            name: "web".into()
-        }
-        .summary()
-        .contains("web"));
-        assert!(AlertData::ImageUpdateAvailable {
-            image: "alpine:3.20".into()
-        }
-        .summary()
-        .contains("alpine:3.20"));
+        assert!(
+            AlertData::ContainerUnhealthy {
+                id: "c".into(),
+                name: "web".into()
+            }
+            .summary()
+            .contains("web")
+        );
+        assert!(
+            AlertData::ImageUpdateAvailable {
+                image: "alpine:3.20".into()
+            }
+            .summary()
+            .contains("alpine:3.20")
+        );
         assert!(disk(91).summary().contains("91"));
-        assert!(AlertData::Custom {
-            message: "hello".into()
-        }
-        .summary()
-        .contains("hello"));
+        assert!(
+            AlertData::Custom {
+                message: "hello".into()
+            }
+            .summary()
+            .contains("hello")
+        );
     }
 
     #[test]

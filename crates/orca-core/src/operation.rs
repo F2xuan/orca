@@ -294,7 +294,11 @@ mod tests {
         assert_eq!(obj["status"], "running");
         assert_eq!(obj["actor"], "user");
 
-        record.finish(OperationStatus::Failed, Some("boom".into()), "2026-01-01T00:05:00+00:00");
+        record.finish(
+            OperationStatus::Failed,
+            Some("boom".into()),
+            "2026-01-01T00:05:00+00:00",
+        );
         let value = serde_json::to_value(&record).expect("a finished record serialises");
         let obj = value.as_object().expect("an object");
         assert_eq!(obj["status"], "failed");
@@ -332,10 +336,7 @@ mod tests {
         );
         assert_eq!(record.status, OperationStatus::Failed);
         assert_eq!(record.error.as_deref(), Some("compose up failed"));
-        assert_eq!(
-            record.finished_at.as_deref(),
-            Some("2026-01-01T00:01:00+00:00")
-        );
+        assert_eq!(record.finished_at.as_deref(), Some("2026-01-01T00:01:00+00:00"));
         assert!(!record.is_running());
     }
 
@@ -352,7 +353,11 @@ mod tests {
     #[test]
     fn a_non_terminal_finish_closes_the_record_anyway() {
         let mut record = running("a");
-        record.finish(OperationStatus::Running, Some("huh".into()), "2026-01-01T00:01:00+00:00");
+        record.finish(
+            OperationStatus::Running,
+            Some("huh".into()),
+            "2026-01-01T00:01:00+00:00",
+        );
         assert_eq!(record.status, OperationStatus::Failed);
         assert!(record.finished_at.is_some(), "record must not be left open");
         assert!(record.error.as_deref().unwrap_or_default().contains("huh"));
@@ -384,10 +389,7 @@ mod tests {
         assert_eq!(records[1].status, OperationStatus::Success, "success is left alone");
         assert_eq!(records[2].status, OperationStatus::Failed, "failure is left alone");
         assert_eq!(records[3].status, OperationStatus::Interrupted, "idempotent");
-        assert_eq!(
-            records[0].finished_at.as_deref(),
-            Some("2026-01-01T01:00:00+00:00")
-        );
+        assert_eq!(records[0].finished_at.as_deref(), Some("2026-01-01T01:00:00+00:00"));
     }
 
     #[test]
@@ -433,10 +435,7 @@ mod tests {
             serde_json::to_string(&OperationKind::ComposeDown).unwrap(),
             "\"compose_down\""
         );
-        assert_eq!(
-            serde_json::to_string(&OperationActor::Agent).unwrap(),
-            "\"agent\""
-        );
+        assert_eq!(serde_json::to_string(&OperationActor::Agent).unwrap(), "\"agent\"");
     }
 
     /// An older client must be able to read a log written by a newer daemon.

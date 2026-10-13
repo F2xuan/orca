@@ -15,8 +15,8 @@ mod api;
 // (monitor is registered below, after build_manager)
 mod build_manager;
 mod cache;
-mod monitor;
 mod gateway;
+mod monitor;
 mod operations;
 mod reconcile;
 mod registry;
@@ -67,10 +67,7 @@ fn app(state: Arc<AppState>) -> Router {
         .nest("/api/v1", api::routes())
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            api::invalidate_caches,
-        ))
+        .layer(middleware::from_fn_with_state(state.clone(), api::invalidate_caches))
         .layer(middleware::from_fn_with_state(state, api::auth_middleware))
         .layer(api::cors_layer())
 }
@@ -102,10 +99,7 @@ async fn main() -> anyhow::Result<()> {
     // are UB. This runs at the very top of `main`, before the runtime spawns
     // any worker that reads the environment, and the daemon is single-tenant.
     unsafe {
-        std::env::set_var(
-            "PATH",
-            orca_backend_common::environment::extended_path(),
-        );
+        std::env::set_var("PATH", orca_backend_common::environment::extended_path());
     }
 
     // Install the rustls `ring` crypto provider process-wide. rustls 0.23
@@ -494,10 +488,7 @@ async fn lima_run(
 
 /// [`lima_run`] with the Homebrew-aware PATH that `limactl` needs.
 #[cfg(target_os = "macos")]
-async fn lima(
-    args: &[&str],
-    timeout: Option<std::time::Duration>,
-) -> anyhow::Result<orca_core::proc::CommandOutput> {
+async fn lima(args: &[&str], timeout: Option<std::time::Duration>) -> anyhow::Result<orca_core::proc::CommandOutput> {
     lima_run(&lima_path_env(), args, timeout).await
 }
 
@@ -560,12 +551,7 @@ async fn lima_start(name: &str) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 async fn lima_force_recover(name: &str) {
     tracing::warn!("Lima VM '{name}': attempting force-stop recovery");
-    match lima(
-        &["stop", "--force", name],
-        Some(std::time::Duration::from_secs(120)),
-    )
-    .await
-    {
+    match lima(&["stop", "--force", name], Some(std::time::Duration::from_secs(120))).await {
         Ok(o) if o.success => tracing::info!("Lima VM '{name}': force-stop succeeded"),
         Ok(o) if o.timed_out => {
             tracing::warn!("Lima VM '{name}': force-stop timed out — killing VM process tree")

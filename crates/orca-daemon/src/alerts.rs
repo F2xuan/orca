@@ -222,8 +222,7 @@ pub fn compact() -> usize {
     if folded.len() > MAX_ALERTS {
         // `fold` is newest-first, so truncation would drop the oldest — but an
         // open alert's original timestamp can be old, so partition first.
-        let (open, closed): (Vec<Alert>, Vec<Alert>) =
-            folded.into_iter().partition(Alert::is_open);
+        let (open, closed): (Vec<Alert>, Vec<Alert>) = folded.into_iter().partition(Alert::is_open);
         let room = MAX_ALERTS.saturating_sub(open.len());
         let mut kept = open;
         kept.extend(closed.into_iter().take(room));
@@ -298,9 +297,7 @@ mod tests {
     const T2: &str = "2026-01-01T00:02:00+00:00";
 
     fn data() -> AlertData {
-        AlertData::Custom {
-            message: "test".into(),
-        }
+        AlertData::Custom { message: "test".into() }
     }
 
     fn open(id: &str, ts: &str) -> Alert {

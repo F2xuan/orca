@@ -23,12 +23,12 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt as FuturesStreamExt};
 use orca_core::agent_tools::ToolRisk;
+use orca_core::alert::{Alert, AlertsResponse};
 use orca_core::compose::{self, ComposeRunner};
 use orca_core::image::ImageManager;
 use orca_core::kubernetes::K8sManager;
 use orca_core::machine::{MachineBackend, MachineConfig, MachineInfo, MachineState};
 use orca_core::network::NetworkManager;
-use orca_core::alert::{Alert, AlertsResponse};
 use orca_core::operation::{OperationActor, OperationKind, OperationRecord, OperationsResponse};
 use orca_core::registry::{UpdateCheck, parse_reference};
 use orca_core::runtime::{ContainerRuntime, ContainerStats};
@@ -191,11 +191,7 @@ impl IntoResponse for ApiError {
         // log file is deliberately the one place the full cause list is kept —
         // it is what makes a failure diagnosable — while the client gets the
         // outermost message, scrubbed.
-        let chain = self
-            .err
-            .chain()
-            .map(|cause| cause.to_string())
-            .collect::<Vec<_>>();
+        let chain = self.err.chain().map(|cause| cause.to_string()).collect::<Vec<_>>();
         if self.status.is_server_error() {
             tracing::error!(code = self.code.as_str(), chain = ?chain, "request failed");
         } else {
@@ -348,13 +344,7 @@ pub fn cors_layer() -> CorsLayer {
             HeaderValue::from_static("http://localhost:5173"),
             HeaderValue::from_static("http://127.0.0.1:5173"),
         ]))
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::PATCH,
-            Method::DELETE,
-        ])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
         .max_age(Duration::from_secs(600))
 }
@@ -762,10 +752,7 @@ async fn list_containers(State(state): State<Arc<AppState>>) -> Result<impl Into
 /// The snapshot holds text rather than a typed error, so the cause chain
 /// survives as the message and the redactor scrubs it on the way out.
 fn cache_unavailable(err: Option<&str>, what: &str) -> ApiError {
-    ApiError::new(
-        ErrorCode::Internal,
-        anyhow::anyhow!("{}", err.unwrap_or(what)),
-    )
+    ApiError::new(ErrorCode::Internal, anyhow::anyhow!("{}", err.unwrap_or(what)))
 }
 
 /// Which cached lists a completed request invalidates.
@@ -868,10 +855,7 @@ async fn remove_container(
     //   "container is restarting: stop the container before removing or force remove"
     // This was hardcoded to `false`, so the UI's force intent never reached
     // Docker and such a container could not be deleted at all.
-    let force = matches!(
-        query.get("force").map(String::as_str),
-        Some("1" | "true" | "yes")
-    );
+    let force = matches!(query.get("force").map(String::as_str), Some("1" | "true" | "yes"));
     state.rt().await.remove_container(&id, force).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1333,9 +1317,7 @@ struct ImageUpdate {
 /// Results are tri-state per tag (`up_to_date` / `update_available` /
 /// `unknown`) because "I could not reach the registry" must never be rendered as
 /// "you are up to date".
-async fn check_image_updates(
-    State(state): State<Arc<AppState>>,
-) -> Result<impl IntoResponse, ApiError> {
+async fn check_image_updates(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     let images = ImageManager::list(state.rt().await.as_ref()).await?;
     // Snapshot credentials and release the lock before doing any network I/O.
     let credentials = state.config.lock().await.registries.clone();
@@ -1364,23 +1346,22 @@ async fn check_image_updates(
 
     // Bounded concurrency: a user with fifty images should not open fifty
     // simultaneous connections.
-    let fetched: Vec<(String, Result<String, String>)> =
-        futures::stream::iter(references.iter().cloned())
-            // Cloned into the async block rather than borrowed: a closure that
-            // returns a future borrowing its argument does not satisfy the
-            // higher-ranked bound `buffer_unordered` requires.
-            .map(|reference| async move {
-                let key = crate::registry::reference_key(&reference);
-                let result = crate::registry::remote_digest(&reference, credentials)
-                    .await
-                    // `{:#}` keeps the cause chain, which is what distinguishes
-                    // "offline" from "private, no credentials".
-                    .map_err(|e| format!("{e:#}"));
-                (key, result)
-            })
-            .buffer_unordered(4)
-            .collect()
-            .await;
+    let fetched: Vec<(String, Result<String, String>)> = futures::stream::iter(references.iter().cloned())
+        // Cloned into the async block rather than borrowed: a closure that
+        // returns a future borrowing its argument does not satisfy the
+        // higher-ranked bound `buffer_unordered` requires.
+        .map(|reference| async move {
+            let key = crate::registry::reference_key(&reference);
+            let result = crate::registry::remote_digest(&reference, credentials)
+                .await
+                // `{:#}` keeps the cause chain, which is what distinguishes
+                // "offline" from "private, no credentials".
+                .map_err(|e| format!("{e:#}"));
+            (key, result)
+        })
+        .buffer_unordered(4)
+        .collect()
+        .await;
     let by_reference: HashMap<String, Result<String, String>> = fetched.into_iter().collect();
 
     let mut updates: Vec<ImageUpdate> = Vec::new();
@@ -4991,9 +4972,7 @@ async fn put_engine_config(
 }
 
 /// Replace the whole config object (the advanced raw-JSON editor).
-async fn put_engine_config_raw(
-    Json(body): Json<serde_json::Value>,
-) -> Result<impl IntoResponse, ApiError> {
+async fn put_engine_config_raw(Json(body): Json<serde_json::Value>) -> Result<impl IntoResponse, ApiError> {
     use orca_backend_common::engine_config as ec;
 
     let config = body
@@ -5180,10 +5159,7 @@ async fn delete_user_template(Query(params): Query<DeleteTemplateParams>) -> Res
     let before = user_templates.len();
     user_templates.retain(|t| t.id != params.id);
     if user_templates.len() == before {
-        return Err(ApiError::not_found(format!(
-            "User template '{}' not found",
-            params.id
-        )));
+        return Err(ApiError::not_found(format!("User template '{}' not found", params.id)));
     }
     orca_backend_common::templates::save_user_templates(&user_templates).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -5434,9 +5410,7 @@ struct OperationsQuery {
 /// written before the work starts and closed when it ends, so a client that
 /// reloaded, or lost its connection, can still find out what happened — instead
 /// of the outcome existing only in a toast that has already been dismissed.
-async fn list_operations(
-    Query(query): Query<OperationsQuery>,
-) -> Result<impl IntoResponse, ApiError> {
+async fn list_operations(Query(query): Query<OperationsQuery>) -> Result<impl IntoResponse, ApiError> {
     let mut records = operations::list().await;
     if query.active.unwrap_or(false) {
         records.retain(|record| !record.status.is_terminal());
@@ -5506,9 +5480,7 @@ async fn resolve_alert(Path(id): Path<String>) -> Result<impl IntoResponse, ApiE
     } else {
         // Distinguishing "no such alert" from "already resolved" would leak
         // nothing useful and give the client one more case to handle.
-        Err(ApiError::not_found(format!(
-            "No open alert with id '{id}'"
-        )))
+        Err(ApiError::not_found(format!("No open alert with id '{id}'")))
     }
 }
 
@@ -5749,10 +5721,7 @@ pub(crate) fn template_named_volumes(specs: &[String]) -> Vec<String> {
 /// named volume. Docker's rule: a leading `/`, `~`, `./` or `../` means a
 /// path; anything else is a volume name.
 pub(crate) fn is_host_path(source: &str) -> bool {
-    source.starts_with('/')
-        || source.starts_with('~')
-        || source.starts_with("./")
-        || source.starts_with("../")
+    source.starts_with('/') || source.starts_with('~') || source.starts_with("./") || source.starts_with("../")
 }
 
 /// Build the volume mounts for a single-container template deploy.
@@ -5777,8 +5746,7 @@ pub(crate) fn deploy_volume_mounts(
         .iter()
         .filter_map(|s| {
             let (raw, target) = s.split_once(':')?;
-            let is_template_volume =
-                !is_host_path(raw) && template_defaults.iter().any(|d| d == raw);
+            let is_template_volume = !is_host_path(raw) && template_defaults.iter().any(|d| d == raw);
             let source = if is_template_volume {
                 format!("{raw}-{tag}")
             } else {
@@ -5808,9 +5776,7 @@ pub(crate) fn resolve_placeholder(value: &str, fallback: &mut Option<String>) ->
     if !value.contains(PASSWORD_PLACEHOLDER) {
         return value.to_string();
     }
-    let secret = fallback.get_or_insert_with(
-        orca_backend_common::templates::placeholder_secret,
-    );
+    let secret = fallback.get_or_insert_with(orca_backend_common::templates::placeholder_secret);
     value.replace(PASSWORD_PLACEHOLDER, secret)
 }
 
@@ -6141,9 +6107,7 @@ async fn deploy_template(
 
     if let Some(yaml) = compose_yaml {
         // --- Compose stack deploy path ---
-        let stack_name = overrides
-            .name
-            .unwrap_or_else(|| default_deploy_name(&template.id));
+        let stack_name = overrides.name.unwrap_or_else(|| default_deploy_name(&template.id));
         // Validate the name and verify containment so an attacker-controlled
         // name can't escape the stacks directory via `..` or an absolute
         // path.
@@ -6330,16 +6294,12 @@ async fn deploy_template(
         .iter()
         .filter_map(|s| {
             let (key, raw) = s.split_once('=')?;
-            Some((
-                key.trim().to_string(),
-                resolve_placeholder(raw, &mut fallback),
-            ))
+            Some((key.trim().to_string(), resolve_placeholder(raw, &mut fallback)))
         })
         .collect();
 
     let vol_list = overrides.volumes.unwrap_or_else(|| template.default_volumes.clone());
-    let volumes: Vec<orca_core::runtime::VolumeMount> =
-        deploy_volume_mounts(&vol_list, &volume_tag, &template_volumes);
+    let volumes: Vec<orca_core::runtime::VolumeMount> = deploy_volume_mounts(&vol_list, &volume_tag, &template_volumes);
 
     // Built before `env` is moved into the create opts.
     let notes = render_notes(template, &env, &mut fallback);
@@ -6841,10 +6801,7 @@ struct LimaSettingsRequest {
 /// `limactl` call failed until the machine was rebooted. Routing through
 /// `orca_core::proc` kills the group instead, and applies the Homebrew PATH in
 /// one place rather than at each call site.
-async fn lima(
-    args: &[&str],
-    timeout: Duration,
-) -> anyhow::Result<orca_core::proc::CommandOutput> {
+async fn lima(args: &[&str], timeout: Duration) -> anyhow::Result<orca_core::proc::CommandOutput> {
     let path_env = format!(
         "/opt/homebrew/bin:/usr/local/bin:{}",
         std::env::var("PATH").unwrap_or_default()
@@ -6952,11 +6909,7 @@ async fn save_lima_settings(Json(body): Json<LimaSettingsRequest>) -> Result<imp
     // Report child-command failures with a `command_failed` / `timeout` code
     // rather than the generic `internal` a bare `?` would produce, so the UI can
     // distinguish "limactl is unhappy" from "the daemon has a bug".
-    let edit_out = lima(
-        &["edit", &body.name, "--set", &set_expr],
-        limactl_timeout,
-    )
-    .await?;
+    let edit_out = lima(&["edit", &body.name, "--set", &set_expr], limactl_timeout).await?;
     if edit_out.timed_out {
         return Err(ApiError::new(
             ErrorCode::Timeout,
@@ -9559,10 +9512,8 @@ mod tests {
             event_type_name(&orca_core::event::EventKind::AlertChanged { open_count: 1 }),
             "alert.changed"
         );
-        let value = serde_json::to_value(orca_core::event::EventKind::AlertChanged {
-            open_count: 1,
-        })
-        .expect("serialises");
+        let value =
+            serde_json::to_value(orca_core::event::EventKind::AlertChanged { open_count: 1 }).expect("serialises");
         assert_eq!(
             value["type"], "AlertChanged",
             "the GUI's eventType check reads this field"
@@ -9637,11 +9588,7 @@ mod tests {
     fn a_path_that_merely_mentions_the_word_does_not_invalidate() {
         use axum::http::Method;
         assert_eq!(
-            invalidated_by(
-                &Method::POST,
-                "/api/v1/containers-archive",
-                StatusCode::OK
-            ),
+            invalidated_by(&Method::POST, "/api/v1/containers-archive", StatusCode::OK),
             Invalidated {
                 containers: false,
                 images: false
@@ -9700,8 +9647,7 @@ mod tests {
         resolved.resolved = true;
         resolved.resolved_ts = Some("2026-01-01T00:01:00+00:00".into());
 
-        let envelope = serde_json::to_value(alerts_envelope(vec![open, resolved]))
-            .expect("the envelope serialises");
+        let envelope = serde_json::to_value(alerts_envelope(vec![open, resolved])).expect("the envelope serialises");
         let obj = envelope.as_object().expect("an object");
         let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         keys.sort_unstable();
@@ -9722,8 +9668,7 @@ mod tests {
     /// serialises for real and pins what actually goes on the wire.
     #[test]
     fn the_operation_envelope_serialises_to_the_keys_the_gui_reads() {
-        let envelope =
-            serde_json::to_value(operations_envelope(Vec::new())).expect("the envelope serialises");
+        let envelope = serde_json::to_value(operations_envelope(Vec::new())).expect("the envelope serialises");
         let obj = envelope.as_object().expect("an object");
         let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         keys.sort_unstable();
@@ -10027,11 +9972,11 @@ nested:
         let a = default_deploy_name("mongodb");
         let b = default_deploy_name("mongodb");
         assert_ne!(a, b, "two deploys produced the same name: {a}");
-    
+
         // Prefix is preserved so the name stays recognisable…
         assert!(a.starts_with("mongodb-"), "{a}");
         assert!(b.starts_with("mongodb-"), "{b}");
-    
+
         // …and the result must satisfy docker-compose project rules, which
         // `validate_stack_name` enforces.
         assert!(validate_stack_name(&a).is_ok());
@@ -10046,7 +9991,10 @@ nested:
         // The normal path: `all_templates()` already substituted a secret and
         // the client sent it back, so the deploy must not touch it.
         let mut fallback = None;
-        assert_eq!(resolve_placeholder("Ab3dEf6hJk9lMn0p", &mut fallback), "Ab3dEf6hJk9lMn0p");
+        assert_eq!(
+            resolve_placeholder("Ab3dEf6hJk9lMn0p", &mut fallback),
+            "Ab3dEf6hJk9lMn0p"
+        );
         assert!(fallback.is_none(), "nothing should have been minted");
     }
 
@@ -10086,9 +10034,7 @@ nested:
     /// `defaults` mimics `template.default_volumes`.
     fn mount_source(specs: &[&str], tag: &str, defaults: &[&str]) -> Vec<String> {
         let specs: Vec<String> = specs.iter().map(|s| s.to_string()).collect();
-        let defaults = template_named_volumes(
-            &defaults.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        );
+        let defaults = template_named_volumes(&defaults.iter().map(|s| s.to_string()).collect::<Vec<_>>());
         deploy_volume_mounts(&specs, tag, &defaults)
             .into_iter()
             .map(|m| m.source)
@@ -10219,8 +10165,7 @@ nested:
     /// scrubbed — that asymmetry is the whole point (diagnosability vs egress).
     #[test]
     fn scrubbing_happens_on_the_body_not_before_logging() {
-        let err = anyhow::anyhow!("outer")
-            .context("inner: https://u:tokendetail@example.com/x");
+        let err = anyhow::anyhow!("outer").context("inner: https://u:tokendetail@example.com/x");
         // The chain still carries the detail the response body will not.
         let chain: Vec<String> = err.chain().map(|c| c.to_string()).collect();
         assert!(chain.iter().any(|c| c.contains("tokendetail")));
@@ -10289,10 +10234,7 @@ mod cors_tests {
             .uri("/api/v1/containers")
             .header("origin", origin)
             .header("access-control-request-method", "GET")
-            .header(
-                "access-control-request-headers",
-                "authorization,content-type",
-            )
+            .header("access-control-request-headers", "authorization,content-type")
             .body(Body::empty())
             .expect("build request")
     }
@@ -10300,10 +10242,7 @@ mod cors_tests {
     /// The macOS/Linux webview origin — the one that actually broke.
     #[tokio::test]
     async fn the_webview_origin_gets_a_usable_preflight() {
-        let res = app()
-            .oneshot(preflight("tauri://localhost"))
-            .await
-            .expect("oneshot");
+        let res = app().oneshot(preflight("tauri://localhost")).await.expect("oneshot");
         assert_ne!(
             res.status(),
             StatusCode::UNAUTHORIZED,
@@ -10348,10 +10287,7 @@ mod cors_tests {
     /// so a page they merely visit must not be able to read its responses.
     #[tokio::test]
     async fn a_foreign_origin_is_not_granted_cors() {
-        let res = app()
-            .oneshot(preflight("https://evil.example"))
-            .await
-            .expect("oneshot");
+        let res = app().oneshot(preflight("https://evil.example")).await.expect("oneshot");
         assert!(
             res.headers().get("access-control-allow-origin").is_none(),
             "a foreign origin was granted CORS: {:?}",

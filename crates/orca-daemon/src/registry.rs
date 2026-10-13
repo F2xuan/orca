@@ -82,10 +82,7 @@ fn registry_base_url(host: &str) -> String {
 }
 
 /// The stored credential for a registry, if any.
-fn credential_for<'a>(
-    credentials: &'a [RegistryCredential],
-    registry: &str,
-) -> Option<&'a RegistryCredential> {
+fn credential_for<'a>(credentials: &'a [RegistryCredential], registry: &str) -> Option<&'a RegistryCredential> {
     credentials
         .iter()
         .find(|credential| registry::server_matches(&credential.server, registry))
@@ -115,10 +112,7 @@ fn cache_token(key: &str, token: String) {
 /// registry itself. Sending them to the registry would hand the password to
 /// whatever host answered the request — which is exactly the party the token
 /// flow exists to keep the password away from.
-async fn fetch_token(
-    challenge: &BearerChallenge,
-    credentials: Option<&RegistryCredential>,
-) -> anyhow::Result<String> {
+async fn fetch_token(challenge: &BearerChallenge, credentials: Option<&RegistryCredential>) -> anyhow::Result<String> {
     let mut query: Vec<(&str, &str)> = Vec::new();
     if let Some(service) = &challenge.service {
         query.push(("service", service));
@@ -139,10 +133,7 @@ async fn fetch_token(
         .await
         .context("cannot reach the registry token endpoint")?;
     if !response.status().is_success() {
-        anyhow::bail!(
-            "the registry token endpoint returned {}",
-            response.status().as_u16()
-        );
+        anyhow::bail!("the registry token endpoint returned {}", response.status().as_u16());
     }
 
     let body: serde_json::Value = response
@@ -169,18 +160,12 @@ async fn digest_of(response: reqwest::Response) -> anyhow::Result<String> {
     {
         return Ok(digest.to_string());
     }
-    let bytes = response
-        .bytes()
-        .await
-        .context("could not read the manifest body")?;
+    let bytes = response.bytes().await.context("could not read the manifest body")?;
     Ok(registry::sha256_digest(&bytes))
 }
 
 /// The digest the registry currently serves for `reference`.
-pub async fn remote_digest(
-    reference: &ImageReference,
-    credentials: &[RegistryCredential],
-) -> anyhow::Result<String> {
+pub async fn remote_digest(reference: &ImageReference, credentials: &[RegistryCredential]) -> anyhow::Result<String> {
     let url = format!(
         "{}{}",
         registry_base_url(&reference.registry),
@@ -237,11 +222,7 @@ pub async fn remote_digest(
 
         // Some registries set the digest only on `GET`, so fall back rather than
         // reporting the image as un-comparable.
-        if response
-            .headers()
-            .get("docker-content-digest")
-            .is_some()
-        {
+        if response.headers().get("docker-content-digest").is_some() {
             return digest_of(response).await;
         }
 
@@ -274,10 +255,7 @@ pub async fn remote_digest(
 
 /// The map key identifying one distinct manifest.
 pub fn reference_key(reference: &ImageReference) -> String {
-    format!(
-        "{}/{}:{}",
-        reference.registry, reference.repository, reference.tag
-    )
+    format!("{}/{}:{}", reference.registry, reference.repository, reference.tag)
 }
 
 /// Turn an already-fetched remote digest into a verdict for one local image.
@@ -302,9 +280,7 @@ pub fn resolve(
     }
     match remote {
         Some(Ok(remote)) => UpdateCheck::compare(local.as_deref(), Some(remote)),
-        Some(Err(reason)) => UpdateCheck::Unknown {
-            reason: reason.clone(),
-        },
+        Some(Err(reason)) => UpdateCheck::Unknown { reason: reason.clone() },
         None => UpdateCheck::Unknown {
             reason: "this tag was not checked".to_string(),
         },
@@ -348,11 +324,8 @@ mod tests {
         // `registry-1.docker.io`. Failing to match means silent anonymous access,
         // which for a private image looks like "not found".
         let credentials = vec![credential("https://index.docker.io/v1/", "alice")];
-        let found = credential_for(
-            &credentials,
-            orca_core::registry::DOCKER_HUB_API,
-        )
-        .expect("the Docker Hub credential should be found");
+        let found = credential_for(&credentials, orca_core::registry::DOCKER_HUB_API)
+            .expect("the Docker Hub credential should be found");
         assert_eq!(found.username, "alice");
     }
 

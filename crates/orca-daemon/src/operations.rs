@@ -21,9 +21,7 @@
 
 use std::path::PathBuf;
 
-use orca_core::operation::{
-    self, OperationActor, OperationKind, OperationRecord, OperationStatus,
-};
+use orca_core::operation::{self, OperationActor, OperationKind, OperationRecord, OperationStatus};
 
 /// Serialises every read-modify-write cycle so two concurrent operations cannot
 /// clobber each other's records.
@@ -158,18 +156,8 @@ fn new_id() -> String {
 ///
 /// The write happens here, before the caller does any work, so a crash or a
 /// `pkill` mid-operation leaves evidence that it was attempted.
-pub async fn begin(
-    kind: OperationKind,
-    target: impl Into<String>,
-    actor: OperationActor,
-) -> OperationRecord {
-    let record = OperationRecord::start(
-        new_id(),
-        kind,
-        target,
-        actor,
-        &chrono::Utc::now().to_rfc3339(),
-    );
+pub async fn begin(kind: OperationKind, target: impl Into<String>, actor: OperationActor) -> OperationRecord {
+    let record = OperationRecord::start(new_id(), kind, target, actor, &chrono::Utc::now().to_rfc3339());
 
     let _guard = OPERATIONS_LOCK.lock().await;
     let mut records = load();
@@ -360,8 +348,7 @@ mod tests {
             assert!(after[0].finished_at.is_some());
 
             // ---- A restart sweeps only what is still running ----
-            let running =
-                begin(OperationKind::PruneImages, "dangling", OperationActor::Scheduler).await;
+            let running = begin(OperationKind::PruneImages, "dangling", OperationActor::Scheduler).await;
             assert_eq!(interrupt_running_operations().await, 1);
             let swept = load();
             assert_eq!(

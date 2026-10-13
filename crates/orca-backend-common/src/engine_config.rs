@@ -18,9 +18,9 @@
 //! 4. **A restart is required.** `dockerd` reads this file only at startup, so
 //!    the API reports `restart_required` instead of claiming the change is live.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 
 /// Where the *effective* daemon config lives on this platform.
@@ -62,17 +62,12 @@ pub fn read_config() -> Result<Value> {
     if !path.exists() {
         return Ok(json!({}));
     }
-    let raw =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let raw = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     if raw.trim().is_empty() {
         return Ok(json!({}));
     }
-    let parsed: Value = serde_json::from_str(&raw).with_context(|| {
-        format!(
-            "{} is not valid JSON; refusing to overwrite it",
-            path.display()
-        )
-    })?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .with_context(|| format!("{} is not valid JSON; refusing to overwrite it", path.display()))?;
     if !parsed.is_object() {
         bail!(
             "{} does not contain a JSON object; refusing to overwrite it",
@@ -117,11 +112,7 @@ pub fn write_config(cfg: &Value) -> Result<Option<PathBuf>> {
 fn mirror_list(cfg: &Value) -> Vec<String> {
     cfg.get("registry-mirrors")
         .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
         .unwrap_or_default()
 }
 
@@ -178,10 +169,7 @@ pub async fn running_engine() -> Option<RunningEngine> {
 }
 
 fn normalize(v: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = v
-        .iter()
-        .map(|s| s.trim().trim_end_matches('/').to_string())
-        .collect();
+    let mut out: Vec<String> = v.iter().map(|s| s.trim().trim_end_matches('/').to_string()).collect();
     out.sort();
     out
 }
@@ -216,10 +204,7 @@ pub fn differs_from_running(disk: &Value, running: &RunningEngine) -> bool {
         Some(d) => Some(&d) != running.log_driver.as_ref(),
         // Not set: only a pending restart if the live value is *not* the default
         // (which means the key was removed from disk but the engine still runs it).
-        None => running
-            .log_driver
-            .as_deref()
-            .is_some_and(|v| v != DEFAULT_LOG_DRIVER),
+        None => running.log_driver.as_deref().is_some_and(|v| v != DEFAULT_LOG_DRIVER),
     };
     if log_pending {
         return true;
@@ -343,10 +328,7 @@ pub fn validate_bip(bip: &str) -> Result<()> {
 
 pub fn validate_log_driver(driver: &str) -> Result<()> {
     if !LOG_DRIVERS.contains(&driver) {
-        bail!(
-            "unknown log driver '{driver}' (supported: {})",
-            LOG_DRIVERS.join(", ")
-        );
+        bail!("unknown log driver '{driver}' (supported: {})", LOG_DRIVERS.join(", "));
     }
     Ok(())
 }
@@ -624,12 +606,7 @@ pub fn apply_patch(patch: &EngineConfigPatch) -> Result<Option<PathBuf>> {
     set_array(obj, "dns", patch.dns.as_deref(), validate_dns)?;
     set_num(obj, "mtu", patch.mtu, validate_mtu)?;
     set_str(obj, "bip", patch.bip.as_deref(), validate_bip)?;
-    set_str(
-        obj,
-        "log-driver",
-        patch.log_driver.as_deref(),
-        validate_log_driver,
-    )?;
+    set_str(obj, "log-driver", patch.log_driver.as_deref(), validate_log_driver)?;
     set_log_opts(obj, patch.log_opts.as_ref());
     set_num(
         obj,
@@ -706,10 +683,9 @@ mod tests {
 
     #[test]
     fn patch_removes_keys_on_none_and_keeps_unknown() {
-        let mut obj: Obj = serde_json::from_str(
-            r#"{"builder":{"gc":{}},"experimental":false,"registry-mirrors":["https://a"]}"#,
-        )
-        .unwrap();
+        let mut obj: Obj =
+            serde_json::from_str(r#"{"builder":{"gc":{}},"experimental":false,"registry-mirrors":["https://a"]}"#)
+                .unwrap();
 
         set_array(&mut obj, "registry-mirrors", None, validate_registry_mirrors).unwrap();
         set_bool(&mut obj, "experimental", Some(true));

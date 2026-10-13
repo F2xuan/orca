@@ -573,8 +573,7 @@ async fn dispatch_tool(
                 .collect();
 
             let vol_list = template.default_volumes.clone();
-            let volumes: Vec<VolumeMount> =
-                crate::api::deploy_volume_mounts(&vol_list, &volume_tag, &template_volumes);
+            let volumes: Vec<VolumeMount> = crate::api::deploy_volume_mounts(&vol_list, &volume_tag, &template_volumes);
 
             let opts = ContainerCreateOpts {
                 image: template.image.clone(),
@@ -831,7 +830,10 @@ mod tests {
     #[test]
     fn target_names_the_subject_when_one_is_present() {
         let arguments = serde_json::json!({"id": "abc123", "force": true});
-        assert_eq!(describe_target("remove_container", &arguments), "remove_container(abc123)");
+        assert_eq!(
+            describe_target("remove_container", &arguments),
+            "remove_container(abc123)"
+        );
 
         let arguments = serde_json::json!({"image": "alpine:3.20"});
         assert_eq!(describe_target("pull_image", &arguments), "pull_image(alpine:3.20)");
@@ -877,7 +879,7 @@ mod tests {
     /// gate and the recording would disagree about what exists.
     #[test]
     fn read_tier_tools_are_recognised_by_the_gate() {
-        use orca_core::agent_tools::{tool_risk, ToolRisk};
+        use orca_core::agent_tools::{ToolRisk, tool_risk};
         // The read/write boundary is what decides whether recording happens, so
         // it is worth pinning that a known read tool is Read and a known writer
         // is not.
