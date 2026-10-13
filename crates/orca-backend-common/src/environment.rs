@@ -1331,8 +1331,10 @@ fn decode_output(bytes: &[u8]) -> String {
             0
         };
         let u16s: Vec<u16> = bytes[skip..]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         String::from_utf16_lossy(&u16s)
     } else {
@@ -3218,5 +3220,34 @@ mod tests {
         assert_eq!(recommended_lima_memory_gib(0), 8);
         assert_eq!(recommended_lima_memory_gib(4), 2);
         assert_eq!(recommended_lima_memory_gib(6), 4);
+    }
+
+    #[test]
+    fn decode_output_passes_utf8_through() {
+        assert_eq!(decode_output(b"hello"), "hello");
+        assert_eq!(decode_output(b""), "");
+        // Invalid UTF-8 is replaced with U+FFFD, not dropped.
+        assert_eq!(decode_output(&[0x80]), "\u{FFFD}");
+    }
+
+    #[test]
+    fn decode_output_handles_utf16le_with_bom() {
+        // FF FE BOM followed by "AB" encoded as UTF-16LE.
+        assert_eq!(decode_output(&[0xFF, 0xFE, 0x41, 0x00, 0x42, 0x00]), "AB");
+    }
+
+    #[test]
+    fn decode_output_detects_utf16le_without_bom() {
+        // No BOM, but nulls interleaved with ASCII — the telltale shape that
+        // wsl.exe produces.
+        assert_eq!(decode_output(&[0x41, 0x00, 0x42, 0x00]), "AB");
+    }
+
+    #[test]
+    fn decode_output_drops_a_trailing_odd_byte() {
+        // Bytes are consumed two at a time, so a lone trailing byte cannot form
+        // a code unit and is discarded. `chunks_exact(2)` behaved identically,
+        // which is what makes the `as_chunks` rewrite a pure refactor.
+        assert_eq!(decode_output(&[0x41, 0x00, 0x42, 0x00, 0x43]), "AB");
     }
 }
