@@ -38,19 +38,30 @@ jobs:
       # One architecture failing must not cancel the other.
       fail-fast: false
       matrix:
+        # Every entry builds for its OWN architecture on a native runner. That is
+        # deliberate: musl targets cannot be produced with the distro's
+        # `gcc-<arch>-linux-gnu` cross compiler (it links glibc), and pulling a
+        # separate musl cross toolchain is fragile. Building natively means
+        # `musl-tools` alone is enough, for both architectures.
         include:
           - arch: x86_64
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             deb_arch: amd64
             runner: ubuntu-latest
           - arch: aarch64
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             deb_arch: arm64
-            runner: ubuntu-latest
+            # Public repositories get free arm64 runners; no cross toolchain needed.
+            runner: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
 
+      # NOTE: the toolchain must come from here, never from a committed
+      # `rust-toolchain.toml`. A pin in the repo overrides this action, so the
+      # target is installed into `stable` while cargo resolves to the pinned
+      # version instead — which then cannot find `core`, on aarch64 only
+      # (x86_64-unknown-linux-gnu is the host target and exists everywhere).
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -63,22 +74,29 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-cargo-
 
-      - name: Install cross-compilation tools
-        if: matrix.arch == 'aarch64'
+      - name: Install musl toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y musl-tools
+          musl-gcc --version
 
-      - name: Build orca-daemon
+      - name: Build orca-daemon (static musl)
         run: |
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
-          fi
-          cargo build --release --locked --target ${{ matrix.target }} --bin orca-daemon --bin orca
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          UPPER=$(echo "$TARGET" | tr 'a-z-' 'A-Z_')
+          LOWER=$(echo "$TARGET" | tr '-' '_')
+          # Target-scoped on purpose: host build-scripts (proc-macros, codegen)
+          # must keep using the default gcc. Only C code compiled FOR the target
+          # — vendored openssl, ring — goes through musl-gcc.
+          export "CARGO_TARGET_${UPPER}_LINKER=musl-gcc"
+          export "CC_${LOWER}=musl-gcc"
+          export "AR_${LOWER}=ar"
+          echo "building $TARGET (static musl) with musl-gcc"
+          cargo build --release --locked --target "$TARGET" --bin orca-daemon --bin orca
         env:
           CARGO_TERM_COLOR: always
 
@@ -96,6 +114,25 @@ jobs:
           cp "target/${{ matrix.target }}/release/orca-daemon" "dist/orca-daemon-linux-${{ matrix.arch }}"
           cp "target/${{ matrix.target }}/release/orca"        "dist/orca-linux-${{ matrix.arch }}"
           chmod 755 dist/orca-daemon-linux-${{ matrix.arch }} dist/orca-linux-${{ matrix.arch }}
+
+      # Static linking is the whole point of the musl targets, and it is the one
+      # property that silently regresses: the build still succeeds if the linker
+      # falls back to dynamic linking, and the binary then fails on a host whose
+      # glibc/musl differs. So assert it instead of assuming it.
+      - name: Assert statically linked
+        run: |
+          set -euo pipefail
+          for bin in dist/orca-daemon-linux-${{ matrix.arch }} dist/orca-linux-${{ matrix.arch }}; do
+            echo "--- $bin"
+            file "$bin"
+            if ! file "$bin" | grep -q "statically linked"; then
+              echo "::error::$bin is NOT statically linked"
+              exit 1
+            fi
+            # `ldd` on a static binary reports "not a dynamic executable".
+            ldd "$bin" 2>&1 || true
+          done
+          echo "both binaries are statically linked"
 
       - name: Build .deb package
         if: github.event_name == 'push' || inputs.build_deb
@@ -171,7 +208,7 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          shasum -a 256 * > SHA256SUMS.txt 2>/dev/null || sha256sum * > SHA256SUMS.txt
+          sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       # The reason this workflow is usable in a fork: the binaries are attached

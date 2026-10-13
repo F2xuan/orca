@@ -17,3 +17,24 @@ test-results/
 # TS_RS_EXPORT_DIR. Without that env var ts-rs writes here instead, which is how
 # a stale duplicate appeared once. This directory is not referenced by anything.
 crates/orca-core/bindings/
+
+# Machine-specific, deliberately NOT tracked. Both were committed by accident
+# once (in the catalog-URL commit, via `git add -A`) and the toolchain pin then
+# broke CI:
+#
+#   rust-toolchain.toml pinned 1.88.0, so `dtolnay/rust-toolchain@stable` in
+#   the workflows installed the requested target into `stable` while cargo
+#   resolved to 1.88.0 instead — where the target was absent. That produced
+#   `error[E0463]: can't find crate for 'core'` on aarch64 only, because
+#   x86_64-unknown-linux-gnu is the *host* target and is present in every
+#   toolchain. Keep the local pin out of the repo.
+#
+#   .cargo/config.toml carries a linker workaround for one machine's dyld
+#   (`-no_fixup_chains`, scoped to aarch64-apple-darwin only).
+#
+# If a build here needs them they stay on disk; CI must get its toolchain from
+# the workflow, never from a committed pin.
+rust-toolchain.toml
+rust-toolchain
+.cargo/config.toml
+.cargo/config

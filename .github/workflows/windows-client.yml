@@ -1,0 +1,134 @@
+name: Build Windows client
+
+# Manual only, on purpose. The packaged desktop app needs a Tauri updater
+# signing key, which a fork does not have; without the key `cargo tauri build`
+# aborts while signing the updater artifact and no installer is produced. This
+# workflow builds the same app with updater artifacts switched OFF, which needs
+# no secrets and yields a directly installable NSIS installer.
+#
+# To ship signed builds instead, add TAURI_SIGNING_PRIVATE_KEY (and its
+# password) as repository secrets and drop the `--config tauri.ci.json` below.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  build:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # As in the daemon workflow: the toolchain must come from the workflow, not
+      # from a committed rust-toolchain.toml, or the pin silently wins and the
+      # requested target is missing.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ env.TARGET }}-client-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ env.TARGET }}-client-
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: gui
+        run: npm ci
+
+      # `tauri.conf.json` sets `beforeBuildCommand: ""`, so the frontend is NOT
+      # built by the Tauri CLI — `frontendDist` would point at a stale or missing
+      # `gui/dist` and the packaged app would ship an old UI.
+      - name: Build frontend
+        working-directory: gui
+        run: npx vite build
+
+      - name: Build daemon and CLI sidecars
+        run: |
+          cargo build --release --locked --target ${{ env.TARGET }} --bin orca-daemon --bin orca
+
+      # `tauri.conf.json` lists `externalBin: ["binaries/orca-daemon", "binaries/orca"]`
+      # and `src-tauri/build.rs` only ever writes 0-byte stubs there, so the real
+      # binaries must be placed by hand or the app ships stubs.
+      - name: Copy sidecars into place
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/binaries
+          cp "target/${TARGET}/release/orca-daemon.exe" "src-tauri/binaries/orca-daemon-${TARGET}.exe"
+          cp "target/${TARGET}/release/orca.exe"        "src-tauri/binaries/orca-${TARGET}.exe"
+          ls -la src-tauri/binaries/
+          for f in "src-tauri/binaries/orca-daemon-${TARGET}.exe" "src-tauri/binaries/orca-${TARGET}.exe"; do
+            # `wc -c` rather than `stat`: the -c/-f flags differ between Git Bash
+            # and BSD stat, and this must not be the thing that breaks the build.
+            size=$(wc -c < "$f")
+            if [ "$size" -lt 100000 ]; then
+              echo "::error::$f is only ${size} bytes — that is a build.rs stub, not a real binary"
+              exit 1
+            fi
+          done
+          echo "sidecars look like real binaries"
+
+      - name: Install Tauri CLI
+        uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli
+
+      # Updater artifacts require a private key to sign. Overriding this key
+      # keeps the installer unsigned rather than failing the whole build.
+      - name: Disable updater artifacts (unsigned fork build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '{"bundle":{"createUpdaterArtifacts":false}}' > tauri.ci.json
+          cat tauri.ci.json
+
+      - name: Build Tauri app
+        run: cargo tauri build --target ${{ env.TARGET }} --config tauri.ci.json
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # NSIS installer produced by the `nsis` bundle target.
+          find "target/${TARGET}/release/bundle/nsis" -name '*.exe' -type f -exec cp {} dist/ \;
+          cp "target/${TARGET}/release/orca-gui.exe" dist/ 2>/dev/null || true
+          ls -la dist/
+          if ! ls dist/*.exe >/dev/null 2>&1; then
+            echo "::error::no .exe produced — the build did not produce an installer"
+            exit 1
+          fi
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum *.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orca-windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
