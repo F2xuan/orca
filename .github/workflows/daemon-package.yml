@@ -119,19 +119,52 @@ jobs:
       # property that silently regresses: the build still succeeds if the linker
       # falls back to dynamic linking, and the binary then fails on a host whose
       # glibc/musl differs. So assert it instead of assuming it.
+      #
+      # `file` spells static two ways, and matching only one of them was a real
+      # bug in this check: the classic form is "statically linked" but musl's
+      # static-PIE form is "static-pie linked". Rust defaults to PIE for
+      # x86_64-unknown-linux-musl but not for aarch64, so the first version of
+      # this step passed on aarch64 and failed on x86_64 — identical static
+      # linkage, two different verdicts, and a perfectly good binary thrown away.
+      # Verified against real binaries: a `-static-pie` build has 0 PT_INTERP
+      # and 0 DT_NEEDED, while a dynamic one has 1 of each.
       - name: Assert statically linked
         run: |
           set -euo pipefail
+          fail=0
           for bin in dist/orca-daemon-linux-${{ matrix.arch }} dist/orca-linux-${{ matrix.arch }}; do
             echo "--- $bin"
-            file "$bin"
-            if ! file "$bin" | grep -q "statically linked"; then
-              echo "::error::$bin is NOT statically linked"
-              exit 1
+            out=$(file "$bin")
+            echo "$out"
+
+            # Reject on the *presence* of dynamic linkage rather than requiring
+            # one exact static phrase, so a static wording we have not seen yet
+            # cannot fail the build. Anything unrecognised still fails loudly.
+            if printf '%s' "$out" | grep -q "dynamically linked"; then
+              echo "::error::$bin is dynamically linked"
+              fail=1
+              continue
             fi
-            # `ldd` on a static binary reports "not a dynamic executable".
-            ldd "$bin" 2>&1 || true
+            if ! printf '%s' "$out" | grep -Eq "statically linked|static-pie linked"; then
+              echo "::error::$bin: unrecognised linkage, cannot confirm it is static"
+              fail=1
+              continue
+            fi
+
+            # Independent of `file`'s wording: static means no dynamic loader
+            # (no PT_INTERP) and no shared-library dependencies (no DT_NEEDED).
+            if readelf -l "$bin" 2>/dev/null | grep -q INTERP; then
+              echo "::error::$bin has PT_INTERP, so it needs a dynamic loader"
+              fail=1
+            fi
+            if readelf -d "$bin" 2>/dev/null | grep -q NEEDED; then
+              echo "::error::$bin declares DT_NEEDED shared libraries"
+              readelf -d "$bin" | grep NEEDED || true
+              fail=1
+            fi
+            echo "OK: no dynamic loader, no shared-library dependencies"
           done
+          [ "$fail" -eq 0 ] || exit 1
           echo "both binaries are statically linked"
 
       - name: Build .deb package
